@@ -52,6 +52,40 @@ Running multiple AI coding agents across projects gets messy fast. Agent Deck gi
 
 ## Features
 
+### 🚀 Claude Code Deep Integration
+
+Agent Deck offers **first-class Claude Code integration** with powerful session forking:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Parent Session                    │   Forked Sessions      │
+│  ┌─────────────────┐               │   ┌─────────────────┐  │
+│  │ "Build auth"    │──── Fork ────►│   │ "Try JWT"       │  │
+│  │ claude session  │               │   └─────────────────┘  │
+│  │                 │──── Fork ────►│   ┌─────────────────┐  │
+│  │                 │               │   │ "Try OAuth"     │  │
+│  └─────────────────┘               │   └─────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Fork a conversation** to explore multiple approaches in parallel:
+- Press `f` to quick-fork any Claude session
+- Press `F` to fork with custom name/group
+- Each fork **inherits full conversation context** from parent
+- Forks get their own session ID—can be forked again!
+
+**Use cases:**
+- 🔀 **Branching explorations** — Try different implementation approaches from the same context
+- 🧪 **Experiment safely** — Fork before risky changes, keep original intact
+- 👥 **Parallel work** — Multiple Claude instances working from same knowledge base
+- 📚 **Learning** — Fork to ask "what if" questions without derailing main session
+
+**Automatic session detection:**
+- Detects Claude session ID from `.jsonl` files
+- Tracks sessions across restarts
+- Handles multiple Claude sessions in same project
+- Works with custom Claude profiles (`CLAUDE_CONFIG_DIR`)
+
 ### Intelligent Status Detection
 
 Agent Deck automatically detects what your AI agent is doing:
@@ -188,6 +222,14 @@ agent-deck remove <id|title>                  # By ID or title
 | `d` | Delete |
 | `K` / `J` | Reorder up/down |
 
+#### Claude Code Integration
+| Key | Action |
+|-----|--------|
+| `f` | Quick fork Claude session (inherits conversation context) |
+| `F` | Fork with custom name/group |
+
+*Fork requires an active Claude Code session with a valid session ID.*
+
 #### Search & Import
 | Key | Action |
 |-----|--------|
@@ -244,8 +286,23 @@ Data is stored in `~/.agent-deck/`:
 ```
 ~/.agent-deck/
 ├── sessions.json     # Sessions, groups, state
+├── config.toml       # User configuration (optional)
 └── hooks/            # Hook scripts (optional)
 ```
+
+### Claude Code Profile (Optional)
+
+If you use a custom Claude profile directory (e.g., dual account setup), configure it in `~/.agent-deck/config.toml`:
+
+```toml
+[claude]
+config_dir = "~/.claude-work"
+```
+
+This tells Agent Deck where to find Claude session data for:
+- Session ID detection
+- Fork functionality
+- Session tracking across restarts
 
 ### Hook Integration (Optional)
 
@@ -309,6 +366,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 | Feature | Agent Deck | Alternatives |
 |---------|------------|--------------|
 | Universal (any tool) | ✅ | Often tool-specific |
+| **Claude Code fork** | ✅ Context inheritance | ❌ Not available |
 | Fast session creation | ✅ Instant | Slow startup |
 | Project hierarchy | ✅ Nested groups | Flat lists |
 | Session search | ✅ Fuzzy search | Limited |

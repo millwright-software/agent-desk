@@ -184,3 +184,52 @@ func TestNewDialog_SuggestionFiltering(t *testing.T) {
 		t.Error("not all expected suggestions are available")
 	}
 }
+
+func TestNewDialog_MalformedPathFix(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "normal tilde path",
+			input:    "~/projects/myapp",
+			expected: home + "/projects/myapp",
+		},
+		{
+			name:     "malformed path with cwd prefix",
+			input:    "/Users/someone/claude-deck~/projects/myapp",
+			expected: home + "/projects/myapp",
+		},
+		{
+			name:     "already expanded path",
+			input:    "/Users/ashesh/projects/myapp",
+			expected: "/Users/ashesh/projects/myapp",
+		},
+		{
+			name:     "just tilde",
+			input:    "~",
+			expected: home,
+		},
+		{
+			name:     "malformed path with different prefix",
+			input:    "/some/random/path~/other/path",
+			expected: home + "/other/path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewNewDialog()
+			d.pathInput.SetValue(tt.input)
+
+			_, path, _ := d.GetValues()
+
+			if path != tt.expected {
+				t.Errorf("GetValues() path = %q, want %q", path, tt.expected)
+			}
+		})
+	}
+}

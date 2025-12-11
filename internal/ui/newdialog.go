@@ -120,11 +120,23 @@ func (d *NewDialog) GetValues() (name, path, command string) {
 	name = strings.TrimSpace(d.nameInput.Value())
 	path = strings.TrimSpace(d.pathInput.Value())
 
-	// Expand tilde in path
+	// Fix malformed paths that have ~ in the middle (e.g., "/some/path~/actual/path")
+	// This can happen when textinput suggestion appends instead of replaces
+	if idx := strings.Index(path, "~/"); idx > 0 {
+		// Extract the part after the malformed prefix (the actual tilde-prefixed path)
+		path = path[idx:]
+	}
+
+	// Expand tilde in path (handles both "~/" prefix and just "~")
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			path = filepath.Join(home, path[2:])
+		}
+	} else if path == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			path = home
 		}
 	}
 

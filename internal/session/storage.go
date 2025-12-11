@@ -19,7 +19,14 @@ const (
 )
 
 // expandTilde expands ~ to the user's home directory with path traversal protection
+// It also fixes malformed paths that have ~ in the middle (e.g., "/some/path~/actual/path")
 func expandTilde(path string) string {
+	// Fix malformed paths that have ~ in the middle
+	// This can happen when textinput suggestion appends instead of replaces
+	if idx := strings.Index(path, "~/"); idx > 0 {
+		path = path[idx:]
+	}
+
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -32,6 +39,11 @@ func expandTilde(path string) string {
 			}
 			// Path traversal detected - log and return original
 			log.Printf("Warning: path traversal detected in %q, ignoring expansion", path)
+		}
+	} else if path == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home
 		}
 	}
 	return path
