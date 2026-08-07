@@ -190,6 +190,7 @@ const (
 	IconGemini   = "✨"
 	IconOpenCode = "🌐"
 	IconCodex    = "💻"
+	IconCopilot  = "🐙"
 	IconShell    = "🐚"
 )
 
@@ -234,16 +235,20 @@ var (
 	TreeConnectorSelStyle lipgloss.Style
 
 	// Session status indicator styles
-	SessionStatusRunning  lipgloss.Style
-	SessionStatusWaiting  lipgloss.Style
-	SessionStatusIdle     lipgloss.Style
-	SessionStatusError    lipgloss.Style
-	SessionStatusSelStyle lipgloss.Style
+	SessionStatusRunning    lipgloss.Style
+	SessionStatusWaiting    lipgloss.Style
+	SessionStatusIdle       lipgloss.Style
+	SessionStatusError      lipgloss.Style
+	SessionStatusParked     lipgloss.Style
+	SessionStatusParkedBlue lipgloss.Style
+	SessionStatusUnread     lipgloss.Style
+	SessionStatusSelStyle   lipgloss.Style
 
 	// Session title styles by state
 	SessionTitleDefault  lipgloss.Style
 	SessionTitleActive   lipgloss.Style
 	SessionTitleError    lipgloss.Style
+	SessionTitleParked   lipgloss.Style
 	SessionTitleSelStyle lipgloss.Style
 
 	// Selection indicator
@@ -287,7 +292,7 @@ var LogoBorderStyle lipgloss.Style
 
 // LogoFrames kept for backward compatibility (empty state default)
 var LogoFrames = [][]string{
-	{"●", "◐", "○"},
+	{"●", "●", "○"},
 }
 
 // initStyles initializes all style variables with current theme colors
@@ -333,12 +338,14 @@ func initStyles() {
 		Foreground(ColorCyan)
 
 	// Status Indicator Styles
+	// running = AI is actively processing (yellow), waiting = AI is done and
+	// awaiting the user (green).
 	RunningStyle = lipgloss.NewStyle().
-		Foreground(ColorGreen).
+		Foreground(ColorYellow).
 		Bold(true)
 
 	WaitingStyle = lipgloss.NewStyle().
-		Foreground(ColorYellow).
+		Foreground(ColorGreen).
 		Bold(true)
 
 	IdleStyle = lipgloss.NewStyle().
@@ -485,16 +492,20 @@ func initStyles() {
 	TreeConnectorSelStyle = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorAccent)
 
 	// Session status indicator styles
-	SessionStatusRunning = lipgloss.NewStyle().Foreground(ColorGreen)
-	SessionStatusWaiting = lipgloss.NewStyle().Foreground(ColorYellow)
+	SessionStatusRunning = lipgloss.NewStyle().Foreground(ColorYellow) // processing
+	SessionStatusWaiting = lipgloss.NewStyle().Foreground(ColorGreen)  // done, awaiting user
 	SessionStatusIdle = lipgloss.NewStyle().Foreground(ColorTextDim)
 	SessionStatusError = lipgloss.NewStyle().Foreground(ColorRed)
+	SessionStatusParked = lipgloss.NewStyle().Foreground(ColorRed).Faint(true)        // parked (dim red)
+	SessionStatusParkedBlue = lipgloss.NewStyle().Foreground(ColorAccent).Faint(true) // parked (dim blue)
+	SessionStatusUnread = lipgloss.NewStyle().Foreground(ColorGreen)                  // unread bookmark (bright green)
 	SessionStatusSelStyle = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorAccent)
 
 	// Session title styles by state
 	SessionTitleDefault = lipgloss.NewStyle().Foreground(ColorText)
 	SessionTitleActive = lipgloss.NewStyle().Foreground(ColorText).Bold(true)
 	SessionTitleError = lipgloss.NewStyle().Foreground(ColorText).Underline(true)
+	SessionTitleParked = lipgloss.NewStyle().Foreground(ColorTextDim).Faint(true) // manually parked
 	SessionTitleSelStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorBg).Background(ColorAccent)
 
 	// Selection indicator
@@ -505,8 +516,8 @@ func initStyles() {
 	GroupNameStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
 	GroupCountStyle = lipgloss.NewStyle().Foreground(ColorText)
 	GroupHotkeyStyle = lipgloss.NewStyle().Foreground(ColorComment)
-	GroupStatusRunning = lipgloss.NewStyle().Foreground(ColorGreen)
-	GroupStatusWaiting = lipgloss.NewStyle().Foreground(ColorYellow)
+	GroupStatusRunning = lipgloss.NewStyle().Foreground(ColorYellow) // processing
+	GroupStatusWaiting = lipgloss.NewStyle().Foreground(ColorGreen)  // done, awaiting user
 
 	// Group selected styles
 	GroupNameSelStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorBg).Background(ColorAccent)
@@ -560,7 +571,7 @@ func MenuKey(key, description string) string {
 
 // StatusIndicator returns a styled status indicator.
 // Read-locked to protect against concurrent style access during live theme switches.
-// Standard symbols: ● running, ◐ waiting, ○ idle, ✕ error, ⟳ starting
+// Standard symbols: ● running (green), ● waiting (orange), ○ idle, ✕ error, ⟳ starting
 func StatusIndicator(status string) string {
 	themeMu.RLock()
 	defer themeMu.RUnlock()
@@ -568,7 +579,7 @@ func StatusIndicator(status string) string {
 	case "running":
 		return RunningStyle.Render("●")
 	case "waiting":
-		return WaitingStyle.Render("◐")
+		return WaitingStyle.Render("●")
 	case "idle":
 		return IdleStyle.Render("○")
 	case "error":
@@ -597,6 +608,8 @@ func ToolIcon(tool string) string {
 		return IconCodex
 	case "cursor":
 		return "📝"
+	case "copilot":
+		return IconCopilot
 	case "shell":
 		return IconShell
 	default:
@@ -637,17 +650,22 @@ func GetToolStyle(tool string) lipgloss.Style {
 // RenderLogoIndicator renders a single indicator with appropriate color
 func RenderLogoIndicator(indicator string) string {
 	var color lipgloss.Color
+	var display string
 	switch indicator {
 	case "●":
 		color = ColorGreen // Running
+		display = "●"
 	case "◐":
-		color = ColorYellow // Waiting
+		color = ColorOrange // Waiting (needs attention)
+		display = "●"
 	case "○":
 		color = ColorTextDim // Idle
+		display = "○"
 	default:
 		color = ColorTextDim
+		display = "○"
 	}
-	return lipgloss.NewStyle().Foreground(color).Bold(true).Render(indicator)
+	return lipgloss.NewStyle().Foreground(color).Bold(true).Render(display)
 }
 
 // getLogoIndicators returns 3 indicators based on actual session status counts
@@ -661,7 +679,7 @@ func getLogoIndicators(running, waiting, idle int) []string {
 		indicators = append(indicators, "●")
 	}
 
-	// Add waiting indicators (yellow ◐)
+	// Add waiting indicators (orange ●)
 	for i := 0; i < waiting && len(indicators) < 3; i++ {
 		indicators = append(indicators, "◐")
 	}
@@ -675,8 +693,8 @@ func getLogoIndicators(running, waiting, idle int) []string {
 }
 
 // RenderLogoCompact renders the compact inline logo for the header
-// Shows REAL status: running=●, waiting=◐, idle=○
-// Format: ⟨ ● │ ◐ │ ○ ⟩  (using angle brackets for modern look)
+// Shows REAL status: running=● (green), waiting=● (orange), idle=○
+// Format: ⟨ ● │ ● │ ○ ⟩  (using angle brackets for modern look)
 func RenderLogoCompact(running, waiting, idle int) string {
 	indicators := getLogoIndicators(running, waiting, idle)
 	bracketStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
@@ -690,11 +708,11 @@ func RenderLogoCompact(running, waiting, idle int) string {
 }
 
 // RenderLogoLarge renders the large logo for empty state
-// Shows REAL status: running=●, waiting=◐, idle=○
+// Shows REAL status: running=● (green), waiting=● (orange), idle=○
 // Format:
 //
 //	┌──┬──┬──┐
-//	│● │◐ │○ │
+//	│● │● │○ │
 //	└──┴──┴──┘
 func RenderLogoLarge(running, waiting, idle int) string {
 	indicators := getLogoIndicators(running, waiting, idle)

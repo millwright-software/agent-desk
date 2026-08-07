@@ -173,8 +173,8 @@ func TestStartMaintenanceWorkerDisabled(t *testing.T) {
 	os.Setenv("HOME", tmpHome)
 	defer os.Setenv("HOME", origHome)
 
-	// Create minimal agent-deck dir (no maintenance config)
-	if err := os.MkdirAll(filepath.Join(tmpHome, ".agent-deck"), 0o755); err != nil {
+	// Create minimal agent-desk dir (no maintenance config)
+	if err := os.MkdirAll(filepath.Join(tmpHome, ".agent-desk"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,7 +205,7 @@ func TestStartMaintenanceWorkerCallback(t *testing.T) {
 	os.Setenv("HOME", tmpHome)
 	defer os.Setenv("HOME", origHome)
 
-	deckDir := filepath.Join(tmpHome, ".agent-deck")
+	deckDir := filepath.Join(tmpHome, ".agent-desk")
 	if err := os.MkdirAll(deckDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

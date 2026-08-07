@@ -4,9 +4,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 // SettingType identifies which setting is being edited
@@ -30,10 +30,11 @@ const (
 	SettingShowOutput
 	SettingShowAnalytics
 	SettingMaintenanceEnabled
+	SettingSidebarWidth
 )
 
 // Total number of navigable settings
-const settingsCount = 17
+const settingsCount = 18
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -45,7 +46,7 @@ type SettingsPanel struct {
 
 	// Setting values
 	selectedTheme       int // 0=dark, 1=light, 2=system
-	selectedTool        int // 0=claude, 1=gemini, 2=opencode, 3=codex, 4=none
+	selectedTool        int // 0=claude, 1=gemini, 2=opencode, 3=codex, 4=copilot, 5=none
 	dangerousMode       bool
 	claudeConfigDir     string
 	geminiYoloMode      bool
@@ -61,6 +62,7 @@ type SettingsPanel struct {
 	showOutput          bool
 	showAnalytics       bool
 	maintenanceEnabled  bool
+	sidebarWidthPercent int
 
 	// Text input state
 	editingText bool
@@ -74,8 +76,8 @@ type SettingsPanel struct {
 }
 
 // Tool names for radio selection
-var toolNames = []string{"Claude", "Gemini", "OpenCode", "Codex", "None"}
-var toolValues = []string{"claude", "gemini", "opencode", "codex", ""}
+var toolNames = []string{"Claude", "Gemini", "OpenCode", "Codex", "Copilot", "None"}
+var toolValues = []string{"claude", "gemini", "opencode", "codex", "copilot", ""}
 
 // Search tier names for radio selection
 var tierNames = []string{"Auto", "Instant", "Balanced"}
@@ -96,6 +98,7 @@ func NewSettingsPanel() *SettingsPanel {
 		recentDays:          90,
 		showOutput:          true,  // Default: output ON (shows launch animation)
 		showAnalytics:       false, // Default: analytics OFF (opt-in)
+		sidebarWidthPercent: 35,
 	}
 }
 
@@ -150,7 +153,7 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 	}
 
 	// Default tool
-	s.selectedTool = 4 // None by default
+	s.selectedTool = len(toolValues) - 1 // None (last entry) by default
 	for i, val := range toolValues {
 		if val == config.DefaultTool {
 			s.selectedTool = i
@@ -203,6 +206,12 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 
 	// Maintenance settings
 	s.maintenanceEnabled = config.Maintenance.Enabled
+
+	// UI settings
+	s.sidebarWidthPercent = config.UI.SidebarWidthPercent
+	if s.sidebarWidthPercent < 15 || s.sidebarWidthPercent > 50 {
+		s.sidebarWidthPercent = 35
+	}
 }
 
 // GetConfig returns a UserConfig with current panel values
@@ -258,6 +267,9 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 
 	// Maintenance settings
 	config.Maintenance.Enabled = s.maintenanceEnabled
+
+	// UI settings
+	config.UI.SidebarWidthPercent = s.sidebarWidthPercent
 
 	// Preserve original MCPs and Tools if we have them
 	if s.originalConfig != nil {
@@ -368,6 +380,13 @@ func (s *SettingsPanel) adjustValue(delta int) bool {
 			s.recentDays = newVal
 			changed = true
 			s.needsRestart = true
+		}
+
+	case SettingSidebarWidth:
+		newVal := s.sidebarWidthPercent + (delta * 5)
+		if newVal >= 15 && newVal <= 50 {
+			s.sidebarWidthPercent = newVal
+			changed = true
 		}
 	}
 
@@ -675,10 +694,22 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
 
+	// LAYOUT
+	content.WriteString(sectionStyle.Render("LAYOUT"))
+	content.WriteString("\n")
+
+	line = s.renderNumber("Sidebar width:", s.sidebarWidthPercent, "%")
+	if s.cursor == int(SettingSidebarWidth) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+	content.WriteString(dimStyle.Render("  Also adjustable with [ / ] keys"))
+	content.WriteString("\n\n")
+
 	// MCP & TOOLS
 	content.WriteString(sectionStyle.Render("MCP SERVERS & CUSTOM TOOLS"))
 	content.WriteString("\n")
-	content.WriteString(dimStyle.Render("  Edit ~/.agent-deck/config.toml to configure MCPs and tools."))
+	content.WriteString(dimStyle.Render("  Edit ~/.agent-desk/config.toml to configure MCPs and tools."))
 	content.WriteString("\n")
 	content.WriteString(dimStyle.Render("  Press M on any Claude/Gemini session to attach MCPs."))
 	content.WriteString("\n\n")
@@ -719,6 +750,7 @@ func (s *SettingsPanel) View() string {
 			34, // SettingShowOutput
 			35, // SettingShowAnalytics
 			38, // SettingMaintenanceEnabled
+			41, // SettingSidebarWidth
 		}
 		cursorLine := cursorToLine[s.cursor]
 

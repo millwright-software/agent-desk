@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -243,33 +242,26 @@ func (s *StateDB) SaveInstance(inst *InstanceRow) error {
 	return err
 }
 
-// SaveInstances inserts or replaces multiple instances in a single transaction.
-// It also removes any rows from the database that are not in the provided list,
-// ensuring deleted sessions don't reappear on reload.
+// SaveInstances upserts multiple instances in a single transaction.
+//
+// It is deliberately UPSERT-ONLY: it never deletes rows missing from the list.
+// With AllowMultiple=true, several processes save concurrently, each from its
+// own in-memory snapshot; a "delete everything not in my list" sweep let a
+// stale process wipe sessions another process had just created. Real deletions
+// go through the targeted DeleteInstance path instead. An empty list is refused
+// (no-op) so a stray empty save can never blank the whole table.
 func (s *StateDB) SaveInstances(insts []*InstanceRow) error {
+	if len(insts) == 0 {
+		// Refuse the empty sweep. A legitimately-empty state is reached via
+		// per-row DeleteInstance calls, not by saving an empty snapshot.
+		return nil
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	// Delete rows not in the new list to prevent deleted sessions from reappearing.
-	if len(insts) == 0 {
-		if _, err := tx.Exec("DELETE FROM instances"); err != nil {
-			return err
-		}
-	} else {
-		placeholders := make([]string, len(insts))
-		args := make([]any, len(insts))
-		for i, inst := range insts {
-			placeholders[i] = "?"
-			args[i] = inst.ID
-		}
-		query := "DELETE FROM instances WHERE id NOT IN (" + strings.Join(placeholders, ",") + ")"
-		if _, err := tx.Exec(query, args...); err != nil {
-			return err
-		}
-	}
 
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO instances (

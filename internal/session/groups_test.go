@@ -210,22 +210,25 @@ func TestFlattenWithNestedGroupsCollapsed(t *testing.T) {
 
 // TestSubgroupSortingWithUnrelatedRoots verifies that subgroups stay with their
 // parent root and are not sorted between unrelated root groups.
-// This was a bug where "agent-deck/github-issues" would sort between "My Sessions"
-// and "agent-deck" because full path comparison doesn't respect tree hierarchy.
+// This was a bug where "agent-desk/github-issues" would sort between "My Sessions"
+// and "agent-desk" because full path comparison doesn't respect tree hierarchy.
 func TestSubgroupSortingWithUnrelatedRoots(t *testing.T) {
 	tree := NewGroupTree([]*Instance{})
 
 	// Create root groups with names that alphabetically interleave
-	// "My Sessions" (M) < "agent-deck" (a) in ASCII (uppercase < lowercase)
-	// But "agent-deck/github-issues" would sort before "my-sessions" by full path
+	// "My Sessions" (M) < "agent-desk" (a) in ASCII (uppercase < lowercase)
+	// But "agent-desk/github-issues" would sort before "my-sessions" by full path
 	tree.CreateGroup("My Sessions") // path: my-sessions
-	tree.CreateGroup("agent-deck")  // path: agent-deck
+	tree.CreateGroup("agent-desk")  // path: agent-desk
 	tree.CreateGroup("ard")         // path: ard
-	tree.CreateSubgroup("agent-deck", "github-issues")
+	tree.CreateSubgroup("agent-desk", "github-issues")
+
+	// Give the default group a session so it isn't hidden as empty
+	tree.Groups["my-sessions"].Sessions = []*Instance{{ID: "1", GroupPath: "my-sessions"}}
 
 	// Expand all so subgroups are visible
 	tree.ExpandGroup("my-sessions")
-	tree.ExpandGroup("agent-deck")
+	tree.ExpandGroup("agent-desk")
 	tree.ExpandGroup("ard")
 
 	// Flatten the tree
@@ -239,25 +242,25 @@ func TestSubgroupSortingWithUnrelatedRoots(t *testing.T) {
 		}
 	}
 
-	// Verify: github-issues must come immediately after agent-deck, not before my-sessions
-	agentDeckPos := positions["agent-deck"]
-	githubIssuesPos := positions["agent-deck/github-issues"]
+	// Verify: github-issues must come immediately after agent-desk, not before my-sessions
+	agentDeckPos := positions["agent-desk"]
+	githubIssuesPos := positions["agent-desk/github-issues"]
 	mySessionsPos := positions["my-sessions"]
 	ardPos := positions["ard"]
 
-	// agent-deck/github-issues should come right after agent-deck
+	// agent-desk/github-issues should come right after agent-desk
 	if githubIssuesPos != agentDeckPos+1 {
-		t.Errorf("github-issues (pos %d) should come right after agent-deck (pos %d)",
+		t.Errorf("github-issues (pos %d) should come right after agent-desk (pos %d)",
 			githubIssuesPos, agentDeckPos)
 	}
 
-	// my-sessions should NOT be between agent-deck and github-issues
+	// my-sessions should NOT be between agent-desk and github-issues
 	if mySessionsPos > agentDeckPos && mySessionsPos < githubIssuesPos {
-		t.Errorf("my-sessions (pos %d) should not be between agent-deck (pos %d) and github-issues (pos %d)",
+		t.Errorf("my-sessions (pos %d) should not be between agent-desk (pos %d) and github-issues (pos %d)",
 			mySessionsPos, agentDeckPos, githubIssuesPos)
 	}
 
-	// ard should come after both agent-deck and github-issues (same root family, then ard)
+	// ard should come after both agent-desk and github-issues (same root family, then ard)
 	if ardPos < githubIssuesPos {
 		t.Errorf("ard (pos %d) should come after github-issues (pos %d)",
 			ardPos, githubIssuesPos)
@@ -560,6 +563,50 @@ func TestDeleteDefaultGroup(t *testing.T) {
 	}
 	if tree.Groups[DefaultGroupPath] == nil {
 		t.Errorf("Default group '%s' should still exist after delete attempt", DefaultGroupPath)
+	}
+}
+
+func TestFlattenHidesEmptyDefaultGroup(t *testing.T) {
+	instances := []*Instance{
+		{ID: "1", Title: "session-1", GroupPath: "vault"},
+	}
+	tree := NewGroupTree(instances)
+	tree.CreateGroup(DefaultGroupName) // empty default group, e.g. restored from storage
+
+	items := tree.Flatten()
+	for _, item := range items {
+		if item.Type == ItemTypeGroup && item.Path == DefaultGroupPath {
+			t.Error("Empty default group should be hidden from flattened view")
+		}
+	}
+
+	// Once a session lands in it, it should appear again
+	tree.AddSession(&Instance{ID: "2", Title: "session-2", GroupPath: ""})
+	items = tree.Flatten()
+	found := false
+	for _, item := range items {
+		if item.Type == ItemTypeGroup && item.Path == DefaultGroupPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Default group should be visible once it contains a session")
+	}
+}
+
+func TestDeleteEmptyGroupDoesNotCreateDefault(t *testing.T) {
+	instances := []*Instance{
+		{ID: "1", Title: "session-1", GroupPath: "vault"},
+	}
+	tree := NewGroupTree(instances)
+	tree.CreateGroup("Empty Group")
+
+	moved := tree.DeleteGroup("empty-group")
+	if len(moved) != 0 {
+		t.Errorf("Expected no moved sessions, got %d", len(moved))
+	}
+	if tree.Groups[DefaultGroupPath] != nil {
+		t.Error("Deleting an empty group should not create the default group")
 	}
 }
 
@@ -869,7 +916,7 @@ func TestGetRootPath(t *testing.T) {
 		{"parent/child", "parent"},
 		{"a/b/c", "a"},
 		{"my-sessions", "my-sessions"},
-		{"agent-deck/github-issues", "agent-deck"},
+		{"agent-desk/github-issues", "agent-desk"},
 		{"deep/nested/path/here", "deep"},
 	}
 
@@ -1376,5 +1423,73 @@ func TestBranchOrderingByOrder(t *testing.T) {
 	if zebraIdx > alphaIdx {
 		t.Errorf("Zebra (Order=0) should come before Alpha (Order=1). Zebra=%d, Alpha=%d",
 			zebraIdx, alphaIdx)
+	}
+}
+
+func TestMoveSessionUpSkipsSubSessionOfOtherParent(t *testing.T) {
+	// Reproduces the "two presses to move" bug: a sub-session sits between two
+	// top-level sessions, so a raw-adjacent slice swap changed the slice but not
+	// the flattened display. One MoveSessionUp must change the visible order.
+	instances := []*Instance{
+		{ID: "p1", Title: "P1", GroupPath: "test"},
+		{ID: "s1a", Title: "S1a", GroupPath: "test", ParentSessionID: "p1"},
+		{ID: "p2", Title: "P2", GroupPath: "test"},
+	}
+	tree := NewGroupTree(instances)
+
+	tree.MoveSessionUp(instances[2]) // move p2 up once
+
+	items := tree.Flatten()
+	posP1, posP2 := -1, -1
+	for i, it := range items {
+		if it.Type == ItemTypeSession && it.Session != nil {
+			switch it.Session.ID {
+			case "p1":
+				posP1 = i
+			case "p2":
+				posP2 = i
+			}
+		}
+	}
+	if posP1 < 0 || posP2 < 0 {
+		t.Fatalf("sessions missing from flatten: p1=%d p2=%d", posP1, posP2)
+	}
+	if posP2 > posP1 {
+		t.Errorf("P2 (pos %d) should be above P1 (pos %d) after ONE MoveSessionUp", posP2, posP1)
+	}
+}
+
+func TestMoveSessionEmptyGroupPath(t *testing.T) {
+	// Sessions in the default group may carry an empty GroupPath; moving them
+	// must still work (previously t.Groups[""] missed and it was a hard no-op).
+	instances := []*Instance{
+		{ID: "a", Title: "first", GroupPath: ""},
+		{ID: "b", Title: "second", GroupPath: ""},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups[DefaultGroupPath]
+	if group == nil {
+		t.Fatal("default group should exist")
+	}
+
+	tree.MoveSessionDown(instances[0]) // move "a" down past "b"
+	if group.Sessions[0].ID != "b" || group.Sessions[1].ID != "a" {
+		t.Errorf("expected [b, a], got [%s, %s]", group.Sessions[0].ID, group.Sessions[1].ID)
+	}
+}
+
+func TestMoveSubSessionAmongSiblings(t *testing.T) {
+	instances := []*Instance{
+		{ID: "p", Title: "P", GroupPath: "test"},
+		{ID: "s1", Title: "S1", GroupPath: "test", ParentSessionID: "p"},
+		{ID: "s2", Title: "S2", GroupPath: "test", ParentSessionID: "p"},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	tree.MoveSessionUp(instances[2]) // move s2 up among siblings
+	// s2 should now precede s1 in the slice (both are p's subs)
+	if group.Sessions[1].ID != "s2" || group.Sessions[2].ID != "s1" {
+		t.Errorf("expected siblings [s2, s1], got [%s, %s]", group.Sessions[1].ID, group.Sessions[2].ID)
 	}
 }

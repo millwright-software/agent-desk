@@ -7,13 +7,13 @@ import (
 
 func TestDetectCurrentProfile(t *testing.T) {
 	// Save original env vars
-	origAgentdeckProfile := os.Getenv("AGENTDECK_PROFILE")
+	origAgentdeckProfile := os.Getenv("AGENTDESK_PROFILE")
 	origClaudeConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	defer func() {
 		if origAgentdeckProfile != "" {
-			os.Setenv("AGENTDECK_PROFILE", origAgentdeckProfile)
+			os.Setenv("AGENTDESK_PROFILE", origAgentdeckProfile)
 		} else {
-			os.Unsetenv("AGENTDECK_PROFILE")
+			os.Unsetenv("AGENTDESK_PROFILE")
 		}
 		if origClaudeConfigDir != "" {
 			os.Setenv("CLAUDE_CONFIG_DIR", origClaudeConfigDir)
@@ -24,31 +24,31 @@ func TestDetectCurrentProfile(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		agentdeckProfile string
+		agentdeskProfile string
 		claudeConfigDir  string
 		expectedContains string // Expected profile (or substring for default case)
 	}{
 		{
-			name:             "explicit AGENTDECK_PROFILE takes priority",
-			agentdeckProfile: "work",
+			name:             "explicit AGENTDESK_PROFILE takes priority",
+			agentdeskProfile: "work",
 			claudeConfigDir:  "/Users/test/.claude-personal",
 			expectedContains: "work",
 		},
 		{
 			name:             "CLAUDE_CONFIG_DIR .claude-work suffix",
-			agentdeckProfile: "",
+			agentdeskProfile: "",
 			claudeConfigDir:  "/Users/test/.claude-work",
 			expectedContains: "work",
 		},
 		{
 			name:             "CLAUDE_CONFIG_DIR .claude-personal suffix",
-			agentdeckProfile: "",
+			agentdeskProfile: "",
 			claudeConfigDir:  "/Users/test/.claude-personal",
 			expectedContains: "personal",
 		},
 		{
 			name:             "CLAUDE_CONFIG_DIR with hyphen pattern",
-			agentdeckProfile: "",
+			agentdeskProfile: "",
 			claudeConfigDir:  "/opt/claude-production",
 			expectedContains: "production",
 		},
@@ -57,12 +57,12 @@ func TestDetectCurrentProfile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear env vars
-			os.Unsetenv("AGENTDECK_PROFILE")
+			os.Unsetenv("AGENTDESK_PROFILE")
 			os.Unsetenv("CLAUDE_CONFIG_DIR")
 
 			// Set test env vars
-			if tt.agentdeckProfile != "" {
-				os.Setenv("AGENTDECK_PROFILE", tt.agentdeckProfile)
+			if tt.agentdeskProfile != "" {
+				os.Setenv("AGENTDESK_PROFILE", tt.agentdeskProfile)
 			}
 			if tt.claudeConfigDir != "" {
 				os.Setenv("CLAUDE_CONFIG_DIR", tt.claudeConfigDir)
@@ -78,13 +78,13 @@ func TestDetectCurrentProfile(t *testing.T) {
 
 func TestDetectCurrentProfile_DefaultFallback(t *testing.T) {
 	// Save original env vars
-	origAgentdeckProfile := os.Getenv("AGENTDECK_PROFILE")
+	origAgentdeckProfile := os.Getenv("AGENTDESK_PROFILE")
 	origClaudeConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	defer func() {
 		if origAgentdeckProfile != "" {
-			os.Setenv("AGENTDECK_PROFILE", origAgentdeckProfile)
+			os.Setenv("AGENTDESK_PROFILE", origAgentdeckProfile)
 		} else {
-			os.Unsetenv("AGENTDECK_PROFILE")
+			os.Unsetenv("AGENTDESK_PROFILE")
 		}
 		if origClaudeConfigDir != "" {
 			os.Setenv("CLAUDE_CONFIG_DIR", origClaudeConfigDir)
@@ -94,7 +94,7 @@ func TestDetectCurrentProfile_DefaultFallback(t *testing.T) {
 	}()
 
 	// Clear all env vars
-	os.Unsetenv("AGENTDECK_PROFILE")
+	os.Unsetenv("AGENTDESK_PROFILE")
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
 
 	result := DetectCurrentProfile()

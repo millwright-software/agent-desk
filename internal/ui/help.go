@@ -104,6 +104,7 @@ func (h *HelpOverlay) View() string {
 				{"h / Left", "Collapse / parent"},
 				{"l / Right", "Expand / toggle"},
 				{"1-9", "Jump to group"},
+				{"[ / ]", "Resize sidebar"},
 				{"Enter", "Attach / toggle"},
 			},
 		},
@@ -119,7 +120,7 @@ func (h *HelpOverlay) View() string {
 				{"m", "Move to group"},
 				{"Shift+M", "MCP Manager (Claude)"},
 				{"v", "Toggle preview mode (output/stats/both)"},
-				{"u", "Mark unread"},
+				{"u", "Cycle unread → parked → normal"},
 				{"K / J", "Reorder up/down"},
 				{"f", "Quick fork (Claude only)"},
 				{"F", "Fork with options (Claude only)"},
@@ -131,6 +132,7 @@ func (h *HelpOverlay) View() string {
 			title: "WORKTREES",
 			items: [][2]string{
 				{"W", "Finish worktree (merge + cleanup)"},
+				{"O", "Worktree manager (remove orphans)"},
 				{"n → w", "Create session in worktree"},
 				{"F → w", "Fork session into worktree"},
 			},
@@ -138,7 +140,8 @@ func (h *HelpOverlay) View() string {
 		{
 			title: "GROUPS",
 			items: [][2]string{
-				{"g", "New group"},
+				{"g", "New group (context-aware: subgroup on group header)"},
+				{"G", "New top-level group (always root)"},
 				{"e", "Rename group"},
 				{"Tab", "Toggle expand"},
 			},
@@ -229,7 +232,7 @@ func (h *HelpOverlay) View() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, separatorStyle.Render(strings.Repeat("─", separatorWidth)))
-	lines = append(lines, versionStyle.Render("Agent Deck v"+Version))
+	lines = append(lines, versionStyle.Render("Agent Desk v"+Version))
 
 	totalLines := len(lines)
 

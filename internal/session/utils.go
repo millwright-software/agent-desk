@@ -92,36 +92,3 @@ func GetDirectoryCompletions(input string) ([]string, error) {
 
 	return matches, nil
 }
-
-// CompletionCycler manages the state of directory autocomplete.
-type CompletionCycler struct {
-	matches []string
-	index   int
-}
-
-// IsActive returns true if the cycler has active matches.
-func (c *CompletionCycler) IsActive() bool {
-	return len(c.matches) > 0
-}
-
-// Reset clears the cycler state.
-func (c *CompletionCycler) Reset() {
-	c.matches = nil
-	c.index = -1
-}
-
-// SetMatches sets the matches for the cycler and resets the index.
-func (c *CompletionCycler) SetMatches(matches []string) {
-	c.matches = matches
-	c.index = -1
-}
-
-// Next returns the next match in the cycle.
-// Wraps around to the beginning if the end is reached.
-func (c *CompletionCycler) Next() string {
-	if !c.IsActive() {
-		return ""
-	}
-	c.index = (c.index + 1) % len(c.matches)
-	return c.matches[c.index]
-}

@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
-	"github.com/asheshgoplani/agent-deck/internal/tmux"
+	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
 var sessionLog = logging.ForComponent(logging.CompSession)
@@ -81,14 +81,34 @@ type Instance struct {
 	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
 	CodexStartedAt  int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
 
-	// Latest user input for context (extracted from session files)
-	LatestPrompt      string    `json:"latest_prompt,omitempty"`
-	lastPromptModTime time.Time // mtime cache for updateGeminiLatestPrompt (not serialized)
+	// ColorScheme is the per-session visual theme (preset name from ColorSchemes).
+	// Empty = Default. Applied to the tmux window and the preview pane.
+	ColorScheme string `json:"color_scheme,omitempty"`
+
+	// Flag is the manual u-key marker (none/unread/parked). Purely visual — a
+	// flagged session never counts as a waiting/attention session.
+	Flag SessionFlag `json:"flag,omitempty"`
+
+	// ClaudeModel is the model ID last seen in the session JSONL (e.g.
+	// "claude-fable-5"); shown abbreviated in the session list
+	ClaudeModel string `json:"claude_model,omitempty"`
+
+	// Auto-mode badge cache (IsAutoMode parses ToolOptionsJSON; rows render per frame)
+	autoModeCached   bool
+	autoModeCacheKey string
+
+	// lastLogActivityAt is the mtime of the AI session transcript, captured
+	// during the per-tick log reads (Claude/Gemini). It is the most faithful
+	// "last interacted with" signal — the log is only written on a real turn.
+	// Persisted (tool_data blob): the per-tick refresh is round-robin, so
+	// without persistence a reload/restart would blank recency for every
+	// session at once until each is re-read. The round-robin keeps it fresh.
+	lastLogActivityAt time.Time
 
 	// JSONL tail-read cache: skip re-reading if file hasn't grown
 	lastJSONLSize int64
 	lastJSONLPath string
-	cachedPrompt  string
+	cachedModel   string
 
 	// MCP tracking - which MCPs were loaded when session started/restarted
 	// Used to detect pending MCPs (added after session start) and stale MCPs (removed but still running)
@@ -169,13 +189,24 @@ func (inst *Instance) MarkAccessed() {
 // GetLastActivityTime returns when the session was last active (content changed)
 // Returns CreatedAt if no activity has been tracked yet
 func (inst *Instance) GetLastActivityTime() time.Time {
+	// Most faithful signal: the AI transcript's mtime, captured during the
+	// per-tick prompt reads. It reflects real conversation turns (not pane
+	// redraws/spinners) and survives TUI restarts. Available for Claude and
+	// Gemini; other tools fall through to the tmux/attach chain below.
+	if !inst.lastLogActivityAt.IsZero() {
+		return inst.lastLogActivityAt
+	}
 	if inst.tmuxSession != nil {
 		activityTime := inst.tmuxSession.GetLastActivityTime()
 		if !activityTime.IsZero() {
 			return activityTime
 		}
 	}
-	// Fallback to CreatedAt
+	// No live tmux data (stopped session, or not yet polled): fall back to the
+	// persisted last-attach time so the badge survives TUI restarts, then CreatedAt
+	if !inst.LastAccessedAt.IsZero() && inst.LastAccessedAt.After(inst.CreatedAt) {
+		return inst.LastAccessedAt
+	}
 	return inst.CreatedAt
 }
 
@@ -190,6 +221,144 @@ func (inst *Instance) GetWaitingSince() time.Time {
 	}
 	// Fallback to CreatedAt if no waiting time tracked
 	return inst.CreatedAt
+}
+
+// ModelShortName returns an abbreviated model name for list display
+// (e.g. "claude-fable-5" -> "fable", "gemini-2.5-pro" -> "2.5-pro").
+// Empty when the model is unknown for this tool.
+func (inst *Instance) ModelShortName() string {
+	switch inst.Tool {
+	case "claude":
+		return shortClaudeModel(inst.ClaudeModel)
+	case "gemini":
+		return shortGeminiModel(inst.GeminiModel)
+	case "opencode":
+		if opts, err := UnmarshalOpenCodeOptions(inst.ToolOptionsJSON); err == nil && opts != nil && opts.Model != "" {
+			m := opts.Model
+			if idx := strings.LastIndex(m, "/"); idx >= 0 {
+				m = m[idx+1:]
+			}
+			return shortClaudeModel(m)
+		}
+	}
+	return ""
+}
+
+// shortClaudeModel abbreviates a Claude model ID to a terse badge form:
+// the family's first letter plus its dotted version ("claude-opus-4-8" ->
+// "o4.8", "claude-fable-5" -> "f5", "claude-3-5-sonnet-20241022" -> "s3.5").
+// Non-claude IDs pass through unchanged.
+func shortClaudeModel(id string) string {
+	if id == "" {
+		return ""
+	}
+	rest, ok := strings.CutPrefix(id, "claude-")
+	if !ok {
+		return id
+	}
+
+	var family string
+	var version []string
+	for _, part := range strings.Split(rest, "-") {
+		if part == "" {
+			continue
+		}
+		if part[0] >= '0' && part[0] <= '9' {
+			// Short numeric token is a version segment; a long one (e.g.
+			// "20241022") is a build date and gets dropped.
+			if len(part) <= 2 {
+				version = append(version, part)
+			}
+			continue
+		}
+		if family == "" {
+			family = part
+		}
+	}
+
+	if family == "" {
+		return rest
+	}
+	return family[:1] + strings.Join(version, ".")
+}
+
+// shortGeminiModel abbreviates a Gemini model ID to the same first-letter badge
+// style as Claude: "g" + version + the variant's first letter
+// ("gemini-2.5-pro" -> "g2.5p", "gemini-3-flash-preview" -> "g3f"). The
+// primary version/variant distinction (2.5 vs 3, pro vs flash) is preserved;
+// trailing qualifiers like "-lite"/"-preview" are dropped for brevity.
+func shortGeminiModel(id string) string {
+	if id == "" {
+		return ""
+	}
+	rest := strings.TrimPrefix(id, "gemini-")
+
+	var version, variant string
+	for _, part := range strings.Split(rest, "-") {
+		if part == "" {
+			continue
+		}
+		if part[0] >= '0' && part[0] <= '9' {
+			if version == "" {
+				version = part
+			}
+			continue
+		}
+		if variant == "" {
+			variant = part[:1]
+		}
+	}
+
+	if version == "" && variant == "" {
+		return rest
+	}
+	return "g" + version + variant
+}
+
+// IsAutoMode reports whether the session was launched in an auto-approve
+// mode (Claude --dangerously-skip-permissions, Codex/Gemini yolo).
+// Cached because rows render every frame and Claude/Codex require a JSON parse.
+func (inst *Instance) IsAutoMode() bool {
+	switch inst.Tool {
+	case "gemini":
+		return inst.GeminiYoloMode != nil && *inst.GeminiYoloMode
+	case "claude", "codex":
+		key := string(inst.ToolOptionsJSON)
+		if key == inst.autoModeCacheKey {
+			return inst.autoModeCached
+		}
+		auto := false
+		if inst.Tool == "claude" {
+			if opts, err := UnmarshalClaudeOptions(inst.ToolOptionsJSON); err == nil && opts != nil {
+				auto = opts.SkipPermissions
+			}
+		} else {
+			if opts, err := UnmarshalCodexOptions(inst.ToolOptionsJSON); err == nil && opts != nil {
+				auto = opts.YoloMode != nil && *opts.YoloMode
+			}
+		}
+		inst.autoModeCacheKey = key
+		inst.autoModeCached = auto
+		return auto
+	}
+	return false
+}
+
+// SetColorScheme sets the per-session color scheme by preset name (case-insensitive),
+// updates the tmux session styling, and applies it live if the session exists.
+// The Default scheme clears the stored value. Callers persist via Storage.Save.
+func (inst *Instance) SetColorScheme(name string) {
+	cs := ColorSchemeByName(name)
+	if cs.IsDefault() {
+		inst.ColorScheme = ""
+	} else {
+		inst.ColorScheme = cs.Name
+	}
+	if inst.tmuxSession != nil {
+		inst.tmuxSession.WindowStyle = cs.WindowStyle()
+		inst.tmuxSession.StatusStyle = cs.StatusStyle()
+		inst.tmuxSession.ApplyColorScheme()
+	}
 }
 
 // IsSubSession returns true if this session has a parent
@@ -331,9 +500,9 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 		configDirPrefix = fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", configDir)
 	}
 
-	// AGENTDECK_INSTANCE_ID is set as an inline env var so Claude's hook subprocesses
-	// can identify which agent-deck session they belong to.
-	instanceIDPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s ", i.ID)
+	// AGENTDESK_INSTANCE_ID is set as an inline env var so Claude's hook subprocesses
+	// can identify which agent-desk session they belong to.
+	instanceIDPrefix := fmt.Sprintf("AGENTDESK_INSTANCE_ID=%s ", i.ID)
 	configDirPrefix = instanceIDPrefix + configDirPrefix
 
 	// Get options - either from instance or create defaults from config
@@ -366,7 +535,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				}
 				// Session was never interacted with - use --session-id with same UUID
 				// This handles the case where session was started but no message was sent
-				bashExportPrefix := fmt.Sprintf("export AGENTDECK_INSTANCE_ID=%s; ", i.ID)
+				bashExportPrefix := fmt.Sprintf("export AGENTDESK_INSTANCE_ID=%s; ", i.ID)
 				if IsClaudeConfigDirExplicit() {
 					configDir := GetClaudeConfigDir()
 					bashExportPrefix += fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s; ", configDir)
@@ -390,7 +559,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 		// Reason: Commands with $(...) get wrapped in `bash -c` for fish compatibility (#47),
 		// and shell aliases are not available in non-interactive bash shells.
 		//
-		bashExportPrefix := fmt.Sprintf("export AGENTDECK_INSTANCE_ID=%s; ", i.ID)
+		bashExportPrefix := fmt.Sprintf("export AGENTDESK_INSTANCE_ID=%s; ", i.ID)
 		if IsClaudeConfigDirExplicit() {
 			configDir := GetClaudeConfigDir()
 			bashExportPrefix += fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s; ", configDir)
@@ -630,6 +799,21 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 
 	// For custom commands (e.g., resume commands), return as-is
 	return envPrefix + baseCommand
+}
+
+// buildCopilotCommand builds the launch command for GitHub Copilot CLI.
+// Copilot tracks sessions per directory, so resume needs no captured ID:
+// `copilot --continue` picks up the most recent session in the working dir.
+func (i *Instance) buildCopilotCommand(baseCommand string) string {
+	if i.Tool != "copilot" {
+		return baseCommand
+	}
+	// Bare "copilot" (or empty): start fresh.
+	if baseCommand == "" || baseCommand == "copilot" {
+		return "copilot"
+	}
+	// Custom command (e.g. an explicit resume/flags command): return as-is.
+	return baseCommand
 }
 
 // detectOpenCodeSessionAsync detects the OpenCode session ID after startup
@@ -1123,6 +1307,8 @@ func (i *Instance) Start() error {
 		command = i.buildCodexCommand(i.Command)
 		// Record start time for session ID detection (Unix millis)
 		i.CodexStartedAt = time.Now().UnixMilli()
+	case "copilot":
+		command = i.buildCopilotCommand(i.Command)
 	default:
 		// Check if this is a custom tool with session resume config
 		if toolDef := GetToolDef(i.Tool); toolDef != nil {
@@ -1151,9 +1337,9 @@ func (i *Instance) Start() error {
 		return fmt.Errorf("failed to start tmux session: %w", err)
 	}
 
-	// Set AGENTDECK_INSTANCE_ID for Claude hooks to identify this session
+	// Set AGENTDESK_INSTANCE_ID for Claude hooks to identify this session
 	// This enables real-time status updates via Stop/SessionStart hooks
-	if err := i.tmuxSession.SetEnvironment("AGENTDECK_INSTANCE_ID", i.ID); err != nil {
+	if err := i.tmuxSession.SetEnvironment("AGENTDESK_INSTANCE_ID", i.ID); err != nil {
 		sessionLog.Warn("set_instance_id_failed", slog.String("error", err.Error()))
 	}
 
@@ -1201,6 +1387,8 @@ func (i *Instance) StartWithMessage(message string) error {
 		command = i.buildClaudeCommand(i.Command)
 	case "gemini":
 		command = i.buildGeminiCommand(i.Command)
+	case "copilot":
+		command = i.buildCopilotCommand(i.Command)
 	default:
 		// Check if this is a custom tool with session resume config
 		if toolDef := GetToolDef(i.Tool); toolDef != nil {
@@ -1229,9 +1417,9 @@ func (i *Instance) StartWithMessage(message string) error {
 		return fmt.Errorf("failed to start tmux session: %w", err)
 	}
 
-	// Set AGENTDECK_INSTANCE_ID for Claude hooks to identify this session
+	// Set AGENTDESK_INSTANCE_ID for Claude hooks to identify this session
 	// This enables real-time status updates via Stop/SessionStart hooks
-	if err := i.tmuxSession.SetEnvironment("AGENTDECK_INSTANCE_ID", i.ID); err != nil {
+	if err := i.tmuxSession.SetEnvironment("AGENTDESK_INSTANCE_ID", i.ID); err != nil {
 		sessionLog.Warn("set_instance_id_failed", slog.String("error", err.Error()))
 	}
 
@@ -1370,6 +1558,13 @@ func (i *Instance) UpdateStatus() error {
 	// Session exists - clear error check timestamp
 	i.lastErrorCheck = time.Time{}
 
+	// Refresh the model badge (and log-activity mtime) from the transcript on
+	// every tick — cheap and size-cached — BEFORE the idle/hook short-circuits
+	// below. Otherwise an idle or hook-driven session never picks up a
+	// mid-session /model switch (e.g. the session went idle right after
+	// switching Fable→Opus).
+	i.updateClaudeModelFromDisk()
+
 	// Tiered polling: skip expensive checks for idle sessions with no new activity
 	if i.Status == StatusIdle {
 		currentTS := i.tmuxSession.GetCachedWindowActivity()
@@ -1412,6 +1607,10 @@ func (i *Instance) UpdateStatus() error {
 			i.ClaudeSessionID = i.hookSessionID
 			i.ClaudeDetectedAt = time.Now()
 		}
+		// Refresh the model here too: the hook fast path returns before the
+		// slow-path model read below, so without this a mid-session /model
+		// switch would never update the badge for hook-driven sessions.
+		i.updateClaudeModelFromDisk()
 		return nil
 	}
 
@@ -1430,7 +1629,11 @@ func (i *Instance) UpdateStatus() error {
 	case "active":
 		i.Status = StatusRunning
 	case "waiting":
-		i.Status = StatusWaiting
+		if i.Tool == "shell" {
+			i.Status = StatusIdle
+		} else {
+			i.Status = StatusWaiting
+		}
 	case "idle":
 		i.Status = StatusIdle
 	case "starting":
@@ -1497,24 +1700,34 @@ func (i *Instance) UpdateClaudeSession(excludeIDs map[string]bool) {
 		i.ClaudeDetectedAt = time.Now()
 	}
 
-	// Update latest prompt from JSONL file (tail-read with size caching)
-	if i.ClaudeSessionID != "" {
-		jsonlPath := i.GetJSONLPath()
-		if jsonlPath != "" {
-			if prompt := i.readJSONLTail(jsonlPath); prompt != "" {
-				i.LatestPrompt = prompt
-			}
-		}
+	// Update model + log activity from the JSONL file (tail-read, size-cached)
+	i.updateClaudeModelFromDisk()
+}
+
+// updateClaudeModelFromDisk refreshes ClaudeModel (and the log-activity mtime)
+// from the session transcript. Cheap and size-cached, so it's safe to call on
+// every status tick — including the hook fast path, so a mid-session /model
+// switch (e.g. Fable→Opus) is picked up. Caller must hold i.mu.
+func (i *Instance) updateClaudeModelFromDisk() {
+	if i.Tool != "claude" || i.ClaudeSessionID == "" {
+		return
+	}
+	jsonlPath := i.GetJSONLPath()
+	if jsonlPath == "" {
+		return
+	}
+	if model := i.readJSONLTail(jsonlPath); model != "" {
+		i.ClaudeModel = model
 	}
 }
 
-// collectOtherClaudeSessionIDs enumerates all agent-deck tmux sessions (except this one)
+// collectOtherClaudeSessionIDs enumerates all agent-desk tmux sessions (except this one)
 // and returns the set of CLAUDE_SESSION_ID values they own. Used to avoid stealing
 // another instance's session when scanning for the most recent .jsonl on disk.
 func (i *Instance) collectOtherClaudeSessionIDs() map[string]bool {
 	exclude := make(map[string]bool)
 
-	tmuxSessions, err := tmux.ListAgentDeckSessions()
+	tmuxSessions, err := tmux.ListAgentDeskSessions()
 	if err != nil {
 		return exclude
 	}
@@ -1539,7 +1752,7 @@ func (i *Instance) collectOtherClaudeSessionIDs() map[string]bool {
 }
 
 // syncClaudeSessionFromDisk scans the filesystem for the most recent session file,
-// excluding IDs owned by other agent-deck instances. If a different (newer) session
+// excluding IDs owned by other agent-desk instances. If a different (newer) session
 // is found, it updates ClaudeSessionID, ClaudeDetectedAt, and the tmux env var.
 // This handles the case where /clear in Claude Code creates a new session UUID
 // that the tmux env var doesn't know about yet.
@@ -1692,7 +1905,7 @@ func (i *Instance) UpdateGeminiSession(excludeIDs map[string]bool) {
 	i.syncGeminiSessionFromTmux()
 	i.syncGeminiSessionFromDisk()
 	i.updateGeminiAnalytics()
-	i.updateGeminiLatestPrompt()
+	i.updateGeminiLogActivity()
 }
 
 // syncGeminiSessionFromTmux reads session ID and YOLO mode from tmux environment (authoritative source).
@@ -1754,44 +1967,30 @@ func (i *Instance) updateGeminiAnalytics() {
 	}
 }
 
-// updateGeminiLatestPrompt extracts the latest user prompt from the session file.
-// Uses mtime caching to skip re-reading unchanged files (important for large session files).
-func (i *Instance) updateGeminiLatestPrompt() {
+// updateGeminiLogActivity records the Gemini session file's mtime as the
+// "last interacted" staleness signal (see lastLogActivityAt). It only stats
+// the file — no full read — since nothing consumes the transcript body.
+func (i *Instance) updateGeminiLogActivity() {
 	if i.GeminiSessionID == "" || len(i.GeminiSessionID) < 8 {
 		return
 	}
 
 	sessionsDir := GetGeminiSessionsDir(i.ProjectPath)
 	pattern := filepath.Join(sessionsDir, "session-*-"+i.GeminiSessionID[:8]+".json")
-	filePath, fileMtime := findNewestFile(pattern)
+	_, fileMtime := findNewestFile(pattern)
 
 	// Fallback: cross-project search
-	if filePath == "" {
-		filePath = findGeminiSessionInAllProjects(i.GeminiSessionID)
-		if filePath != "" {
+	if fileMtime.IsZero() {
+		if filePath := findGeminiSessionInAllProjects(i.GeminiSessionID); filePath != "" {
 			if info, err := os.Stat(filePath); err == nil {
 				fileMtime = info.ModTime()
 			}
 		}
 	}
 
-	if filePath == "" {
-		return
+	if !fileMtime.IsZero() {
+		i.lastLogActivityAt = fileMtime
 	}
-
-	// mtime cache: skip re-read if file hasn't changed since last read
-	if !i.lastPromptModTime.IsZero() && !fileMtime.IsZero() && fileMtime.Equal(i.lastPromptModTime) {
-		return
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return
-	}
-	if prompt, err := parseGeminiLatestUserPrompt(data); err == nil && prompt != "" {
-		i.LatestPrompt = prompt
-	}
-	i.lastPromptModTime = fileMtime
 }
 
 // WaitForClaudeSession waits for the tmux environment variable to be set.
@@ -2108,21 +2307,18 @@ func parseClaudeLastAssistantMessage(data []byte, sessionID string) (*ResponseOu
 	}, nil
 }
 
-// parseClaudeLatestUserPrompt parses a Claude JSONL file to extract the last user message
-func parseClaudeLatestUserPrompt(data []byte) (string, error) {
-	// JSONL record structure
+// parseClaudeModel scans a Claude JSONL slice for the most recent assistant
+// model ID (assistant records carry a "model" field).
+func parseClaudeModel(data []byte) string {
 	type claudeMessage struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Model string `json:"model"`
 	}
 	type claudeRecord struct {
 		Message json.RawMessage `json:"message"`
 	}
 
-	var latestPrompt string
-
+	var latestModel string
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	// Handle large lines
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 
@@ -2131,75 +2327,40 @@ func parseClaudeLatestUserPrompt(data []byte) (string, error) {
 		if len(line) == 0 {
 			continue
 		}
-
 		var record claudeRecord
 		if err := json.Unmarshal(line, &record); err != nil {
 			continue // Skip malformed lines
 		}
-
-		// Only care about messages
 		if len(record.Message) == 0 {
 			continue
 		}
-
 		var msg claudeMessage
 		if err := json.Unmarshal(record.Message, &msg); err != nil {
 			continue
 		}
-
-		// Only care about user messages
-		if msg.Role != "user" {
-			continue
-		}
-
-		// Extract content (can be string or array of blocks)
-		var contentStr string
-		var extractedText string
-		if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
-			// Simple string content
-			extractedText = contentStr
-		} else {
-			// Try as array of content blocks
-			var blocks []map[string]interface{}
-			if err := json.Unmarshal(msg.Content, &blocks); err == nil {
-				var sb strings.Builder
-				for _, block := range blocks {
-					if blockType, ok := block["type"].(string); ok && blockType == "text" {
-						if text, ok := block["text"].(string); ok {
-							sb.WriteString(text)
-							sb.WriteString(" ")
-						}
-					}
-				}
-				extractedText = strings.TrimSpace(sb.String())
-			}
-		}
-
-		// Sanitize: strip newlines and extra spaces for single-line display
-		if extractedText != "" {
-			content := strings.ReplaceAll(extractedText, "\n", " ")
-			latestPrompt = strings.Join(strings.Fields(content), " ")
+		if msg.Model != "" {
+			latestModel = msg.Model
 		}
 	}
-
-	return latestPrompt, nil
+	return latestModel
 }
 
-// readJSONLTail reads the last user prompt from a JSONL file using tail-read with size caching.
-// Instead of reading the entire file (can be 100-800MB), it:
-// 1. Stats the file to get current size (cheap syscall)
-// 2. Skips reading entirely if size hasn't changed since last check
-// 3. Only reads the last 32KB when the file has grown
+// readJSONLTail reads the latest assistant model ID from a Claude JSONL file
+// using a size-cached tail read (files can be 100-800MB) and records the file
+// mtime as the "last interacted" staleness signal.
 func (i *Instance) readJSONLTail(path string) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		return ""
 	}
 	size := info.Size()
+	// Record the transcript mtime as the "last interacted" signal (see
+	// lastLogActivityAt) — set on every call, including the cached-size path.
+	i.lastLogActivityAt = info.ModTime()
 
-	// If same file and same size, return cached prompt
+	// If same file and same size, return cached model
 	if path == i.lastJSONLPath && size == i.lastJSONLSize {
-		return i.cachedPrompt
+		return i.cachedModel
 	}
 
 	// File changed or new file - read the tail
@@ -2232,46 +2393,12 @@ func (i *Instance) readJSONLTail(path string) string {
 		}
 	}
 
-	prompt, err := parseClaudeLatestUserPrompt(data)
-	if err != nil || prompt == "" {
-		// Update cache even on empty result to avoid re-reading
-		i.lastJSONLPath = path
-		i.lastJSONLSize = size
-		return i.cachedPrompt // Return previous cached value
+	if model := parseClaudeModel(data); model != "" {
+		i.cachedModel = model
 	}
-
 	i.lastJSONLPath = path
 	i.lastJSONLSize = size
-	i.cachedPrompt = prompt
-	return prompt
-}
-
-// parseGeminiLatestUserPrompt parses a Gemini JSON file to extract the last user message
-func parseGeminiLatestUserPrompt(data []byte) (string, error) {
-	var session struct {
-		Messages []struct {
-			Type    string `json:"type"` // "user" or "gemini"
-			Content string `json:"content"`
-		} `json:"messages"`
-	}
-
-	if err := json.Unmarshal(data, &session); err != nil {
-		return "", fmt.Errorf("failed to parse Gemini session: %w", err)
-	}
-
-	var latestPrompt string
-	// Find last "user" type message
-	for i := len(session.Messages) - 1; i >= 0; i-- {
-		msg := session.Messages[i]
-		if msg.Type == "user" {
-			// Sanitize: strip newlines and extra spaces for single-line display
-			content := strings.ReplaceAll(msg.Content, "\n", " ")
-			latestPrompt = strings.Join(strings.Fields(content), " ")
-			break
-		}
-	}
-
-	return latestPrompt, nil
+	return i.cachedModel
 }
 
 // getGeminiLastResponse extracts the last assistant message from Gemini's JSON file
@@ -2731,6 +2858,10 @@ func (i *Instance) Restart() error {
 		// Set CODEX_SESSION_ID in tmux env so detection works after restart
 		command = fmt.Sprintf("tmux set-environment CODEX_SESSION_ID %s; codex%s resume %s",
 			i.CodexSessionID, i.resolveCodexYoloFlag(), i.CodexSessionID)
+	} else if i.Tool == "copilot" {
+		// Copilot tracks sessions per directory; --continue resumes the most
+		// recent one in the working dir, so no captured session ID is needed.
+		command = "copilot --continue"
 	} else {
 		// Route to appropriate command builder based on tool
 		switch i.Tool {
@@ -2746,6 +2877,8 @@ func (i *Instance) Restart() error {
 			command = i.buildCodexCommand(i.Command)
 			// Record start time for async session ID detection
 			i.CodexStartedAt = time.Now().UnixMilli()
+		case "copilot":
+			command = i.buildCopilotCommand(i.Command)
 		default:
 			// Check if this is a custom tool with session resume config
 			if toolDef := GetToolDef(i.Tool); toolDef != nil {
@@ -2778,9 +2911,9 @@ func (i *Instance) Restart() error {
 
 	mcpLog.Debug("restart_start_succeeded")
 
-	// Set AGENTDECK_INSTANCE_ID for Claude hooks to identify this session
+	// Set AGENTDESK_INSTANCE_ID for Claude hooks to identify this session
 	// This enables real-time status updates via Stop/SessionStart hooks
-	if err := i.tmuxSession.SetEnvironment("AGENTDECK_INSTANCE_ID", i.ID); err != nil {
+	if err := i.tmuxSession.SetEnvironment("AGENTDESK_INSTANCE_ID", i.ID); err != nil {
 		sessionLog.Warn("set_instance_id_failed", slog.String("error", err.Error()))
 	}
 
@@ -2825,9 +2958,9 @@ func (i *Instance) buildClaudeResumeCommand() string {
 		configDirPrefix = fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", configDir)
 	}
 
-	// AGENTDECK_INSTANCE_ID is set as an inline env var so hook subprocesses
-	// can identify which agent-deck session they belong to.
-	instanceIDPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s ", i.ID)
+	// AGENTDESK_INSTANCE_ID is set as an inline env var so hook subprocesses
+	// can identify which agent-desk session they belong to.
+	instanceIDPrefix := fmt.Sprintf("AGENTDESK_INSTANCE_ID=%s ", i.ID)
 	configDirPrefix = instanceIDPrefix + configDirPrefix
 
 	// Get per-session permission settings (falls back to config if not persisted)
@@ -3472,7 +3605,7 @@ func sessionHasConversationData(sessionID string, projectPath string) bool {
 }
 
 // findSessionFileInAllProjects searches all Claude project directories for a session file
-// This handles path hash mismatches when agent-deck runs from a different directory
+// This handles path hash mismatches when agent-desk runs from a different directory
 // than where the Claude session was originally created.
 // Returns the full path to the session file, or empty string if not found.
 func findSessionFileInAllProjects(sessionID string) string {

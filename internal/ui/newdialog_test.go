@@ -51,8 +51,8 @@ func TestDialogSetSize(t *testing.T) {
 func TestDialogPresetCommands(t *testing.T) {
 	d := NewNewDialog()
 
-	// Should have shell (empty), claude, gemini, opencode, codex
-	expectedCommands := []string{"", "claude", "gemini", "opencode", "codex"}
+	// Should have shell (empty), claude, gemini, opencode, codex, copilot
+	expectedCommands := []string{"", "claude", "gemini", "opencode", "codex", "copilot"}
 
 	if len(d.presetCommands) != len(expectedCommands) {
 		t.Errorf("Expected %d preset commands, got %d", len(expectedCommands), len(d.presetCommands))
@@ -132,59 +132,6 @@ func TestNewDialog_SetPathSuggestions(t *testing.T) {
 	if len(d.pathSuggestions) != 3 {
 		t.Errorf("expected 3 suggestions, got %d", len(d.pathSuggestions))
 	}
-
-	// Verify suggestions are set on textinput
-	available := d.pathInput.AvailableSuggestions()
-	if len(available) != 3 {
-		t.Errorf("expected 3 available suggestions on pathInput, got %d", len(available))
-	}
-}
-
-func TestNewDialog_ShowSuggestionsEnabled(t *testing.T) {
-	d := NewNewDialog()
-
-	// ShowSuggestions should be enabled by default
-	if !d.pathInput.ShowSuggestions {
-		t.Error("expected ShowSuggestions to be true on pathInput")
-	}
-}
-
-func TestNewDialog_SuggestionFiltering(t *testing.T) {
-	d := NewNewDialog()
-
-	paths := []string{
-		"/Users/test/project-alpha",
-		"/Users/test/project-beta",
-		"/Users/test/other-thing",
-	}
-
-	d.SetPathSuggestions(paths)
-
-	// Verify suggestions are available
-	available := d.pathInput.AvailableSuggestions()
-	if len(available) != 3 {
-		t.Errorf("expected 3 available suggestions, got %d", len(available))
-	}
-
-	// Verify specific suggestions are in the list
-	hasProjectAlpha := false
-	hasProjectBeta := false
-	hasOtherThing := false
-	for _, s := range available {
-		if s == "/Users/test/project-alpha" {
-			hasProjectAlpha = true
-		}
-		if s == "/Users/test/project-beta" {
-			hasProjectBeta = true
-		}
-		if s == "/Users/test/other-thing" {
-			hasOtherThing = true
-		}
-	}
-
-	if !hasProjectAlpha || !hasProjectBeta || !hasOtherThing {
-		t.Error("not all expected suggestions are available")
-	}
 }
 
 func TestNewDialog_MalformedPathFix(t *testing.T) {
@@ -236,114 +183,356 @@ func TestNewDialog_MalformedPathFix(t *testing.T) {
 	}
 }
 
-// TestNewDialog_TabDoesNotOverwriteCustomPath tests Issue #22:
-// When user enters a new folder path and presses Tab to move to agent selection,
-// the custom path should NOT be overwritten by a suggestion.
-func TestNewDialog_TabDoesNotOverwriteCustomPath(t *testing.T) {
+// ===== Path Dropdown Tests =====
+
+func TestNewDialog_DropdownPopulated_WhenSuggestionsExist(t *testing.T) {
 	d := NewNewDialog()
-	d.Show() // Dialog must be visible for Update to process keys
+	d.SetPathSuggestions([]string{"/a", "/b"})
+	d.ShowInGroup("default", "default", "")
 
-	// Set up suggestions (simulating previously used paths)
-	suggestions := []string{
-		"/Users/test/old-project-1",
-		"/Users/test/old-project-2",
+	if len(d.dropdownItems) == 0 {
+		t.Error("dropdownItems should be populated when suggestions exist")
 	}
-	d.SetPathSuggestions(suggestions)
+	if d.dropdownCursor != -1 {
+		t.Errorf("dropdownCursor should start at -1, got %d", d.dropdownCursor)
+	}
+}
 
-	// User is on path field (focusIndex 1)
+func TestNewDialog_DropdownEmpty_WhenNoSuggestions(t *testing.T) {
+	d := NewNewDialog()
+	d.ShowInGroup("default", "default", "")
+
+	// dropdownItems may contain filesystem completions from cwd, but
+	// with no suggestions and no path-like input, should be based on cwd
+	if d.dropdownCursor != -1 {
+		t.Errorf("dropdownCursor should start at -1, got %d", d.dropdownCursor)
+	}
+}
+
+func TestNewDialog_Dropdown_UpDownNavigates(t *testing.T) {
+	d := NewNewDialog()
+	d.SetPathSuggestions([]string{"/a", "/b", "/c"})
+	d.Show()
 	d.focusIndex = 1
-	d.updateFocus()
+	d.pathInput.SetValue("")
+	d.computeDropdownItems()
 
-	// User types a completely NEW path that doesn't match any suggestion
+	if d.dropdownCursor != -1 {
+		t.Fatalf("dropdownCursor should start at -1, got %d", d.dropdownCursor)
+	}
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if d.dropdownCursor != 0 {
+		t.Errorf("dropdownCursor = %d after Down, want 0", d.dropdownCursor)
+	}
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if d.dropdownCursor != 1 {
+		t.Errorf("dropdownCursor = %d after 2nd Down, want 1", d.dropdownCursor)
+	}
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if d.dropdownCursor != 2 {
+		t.Errorf("dropdownCursor = %d after 3rd Down, want 2", d.dropdownCursor)
+	}
+
+	// Should not go past the end
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if d.dropdownCursor != 2 {
+		t.Errorf("dropdownCursor = %d after 4th Down, want 2 (clamped)", d.dropdownCursor)
+	}
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if d.dropdownCursor != 1 {
+		t.Errorf("dropdownCursor = %d after Up, want 1", d.dropdownCursor)
+	}
+
+	// Up past 0 should reach -1 (no selection)
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyUp})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if d.dropdownCursor != -1 {
+		t.Errorf("dropdownCursor = %d after Up past 0, want -1", d.dropdownCursor)
+	}
+}
+
+func TestNewDialog_Dropdown_EnterAcceptsAndAdvances(t *testing.T) {
+	d := NewNewDialog()
+	d.SetPathSuggestions([]string{"/first", "/second"})
+	d.Show()
+	d.focusIndex = 1
+	d.pathInput.SetValue("")
+	d.computeDropdownItems()
+	d.dropdownCursor = 1
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	_, path, _ := d.GetValues()
+	if path != "/second" {
+		t.Errorf("path = %q, want /second", path)
+	}
+	if d.focusIndex == 1 {
+		t.Error("focus should advance past path field after Enter")
+	}
+}
+
+func TestNewDialog_Dropdown_TabAcceptsAndAdvances(t *testing.T) {
+	d := NewNewDialog()
+	d.SetPathSuggestions([]string{"/first", "/second"})
+	d.Show()
+	d.focusIndex = 1
+	d.pathInput.SetValue("")
+	d.computeDropdownItems()
+	d.dropdownCursor = 0
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	_, path, _ := d.GetValues()
+	if path != "/first" {
+		t.Errorf("path = %q, want /first", path)
+	}
+}
+
+func TestNewDialog_Dropdown_EnterWithNoSelection_UsesRawText(t *testing.T) {
+	d := NewNewDialog()
+	d.Show()
+	d.focusIndex = 1
+	d.dropdownCursor = -1
+
 	customPath := "/Users/test/brand-new-project"
 	d.pathInput.SetValue(customPath)
 
-	// User presses Tab to move to command selection
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	// The custom path should be PRESERVED, not overwritten
 	_, path, _ := d.GetValues()
-
 	if path != customPath {
-		t.Errorf("Tab overwrote custom path!\nGot: %q\nWant: %q\nThis is the bug from Issue #22", path, customPath)
+		t.Errorf("Enter with no selection should use raw text\nGot: %q\nWant: %q", path, customPath)
+	}
+	if d.focusIndex == 1 {
+		t.Error("focus should advance past path field after Enter")
+	}
+}
+
+func TestNewDialog_TabDoesNotOverwriteCustomPath(t *testing.T) {
+	d := NewNewDialog()
+	d.Show()
+
+	d.focusIndex = 1
+	d.dropdownCursor = -1
+	d.updateFocus()
+
+	customPath := "/Users/test/brand-new-project"
+	d.pathInput.SetValue(customPath)
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	_, path, _ := d.GetValues()
+	if path != customPath {
+		t.Errorf("Tab overwrote custom path!\nGot: %q\nWant: %q", path, customPath)
+	}
+}
+
+func TestNewDialog_Dropdown_TypingFilters(t *testing.T) {
+	d := NewNewDialog()
+	d.SetPathSuggestions([]string{"/projects/alpha", "/projects/beta", "/code/gamma"})
+	d.Show()
+	d.focusIndex = 1
+	d.pathInput.SetValue("")
+	d.computeDropdownItems()
+
+	if len(d.dropdownItems) != 3 {
+		t.Fatalf("expected 3 dropdown items with empty input, got %d", len(d.dropdownItems))
 	}
 
-	// Focus should have moved to command field
+	// Simulate typing "alpha" — filter should narrow
+	d.pathInput.SetValue("alpha")
+	d.dropdownCursor = -1
+	d.computeDropdownItems()
+
+	if len(d.dropdownItems) != 1 {
+		t.Errorf("expected 1 dropdown item matching 'alpha', got %d", len(d.dropdownItems))
+	}
+	if len(d.dropdownItems) > 0 && d.dropdownItems[0].path != "/projects/alpha" {
+		t.Errorf("expected /projects/alpha, got %s", d.dropdownItems[0].path)
+	}
+}
+
+// ===== Collapsed Tool Selection Tests =====
+
+func TestNewDialog_ToolCollapsed_WhenDefaultToolSet(t *testing.T) {
+	d := NewNewDialog()
+	d.SetDefaultTool("claude")
+	d.ShowInGroup("default", "default", "")
+
+	if d.toolExpanded {
+		t.Error("tool should be collapsed when default_tool is set")
+	}
+	if !d.hasDefaultTool {
+		t.Error("hasDefaultTool should be true")
+	}
+}
+
+func TestNewDialog_ToolExpanded_WhenNoDefaultTool(t *testing.T) {
+	d := NewNewDialog()
+	d.SetDefaultTool("")
+	d.ShowInGroup("default", "default", "")
+
+	if !d.toolExpanded {
+		t.Error("tool should be expanded when no default_tool")
+	}
+}
+
+func TestNewDialog_ToolExpand_TKey(t *testing.T) {
+	d := NewNewDialog()
+	d.SetDefaultTool("claude")
+	d.Show()
+
+	// Move focus to command field with non-shell cursor so isTextInputFocused() returns false
+	d.focusIndex = 2
+	d.commandCursor = 1 // claude (not shell)
+
+	// 't' should expand the tool picker
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+
+	if !d.toolExpanded {
+		t.Error("'t' should expand the tool picker")
+	}
 	if d.focusIndex != 2 {
-		t.Errorf("focusIndex = %d, want 2 (command field)", d.focusIndex)
+		t.Errorf("focus should move to command field (2), got %d", d.focusIndex)
 	}
 }
 
-// TestNewDialog_TabAppliesSuggestionWhenNavigated tests that Tab DOES apply
-// the suggestion when the user explicitly navigated to one using Ctrl+N/P.
-func TestNewDialog_TabAppliesSuggestionWhenNavigated(t *testing.T) {
+func TestNewDialog_ToolCollapse_EscFromCommandField(t *testing.T) {
 	d := NewNewDialog()
+	d.SetDefaultTool("claude")
 	d.Show()
+	d.toolExpanded = true
+	d.focusIndex = 2
 
-	suggestions := []string{
-		"/Users/test/project-1",
-		"/Users/test/project-2",
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if d.toolExpanded {
+		t.Error("Esc on command field should collapse tool picker")
 	}
-	d.SetPathSuggestions(suggestions)
+}
 
-	// User is on path field
-	d.focusIndex = 1
-	d.updateFocus()
+func TestNewDialog_TabReachesCollapsedTool(t *testing.T) {
+	d := NewNewDialog()
+	d.SetDefaultTool("claude")
+	d.Show()
+	d.focusIndex = 1 // path
 
-	// User types something, then navigates to suggestion with Ctrl+N
-	d.pathInput.SetValue("/some/partial")
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-
-	// Now Tab should apply the suggestion
+	// Tab from path now LANDS on the collapsed tool field (index 2) rather than
+	// skipping it. Skipping it trapped users with a default_tool: only text fields
+	// were reachable, so the t/w/a shortcuts got typed as characters instead.
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if d.focusIndex != 2 {
+		t.Fatalf("Tab should land on the collapsed tool field (2), got %d", d.focusIndex)
+	}
 
-	_, path, _ := d.GetValues()
-
-	// Should be the second suggestion (Ctrl+N moved from 0 to 1)
-	if path != "/Users/test/project-2" {
-		t.Errorf("Tab should apply suggestion after Ctrl+N navigation\nGot: %q\nWant: %q", path, "/Users/test/project-2")
+	// w toggles worktree from the collapsed tool field (no expand needed).
+	d.nameInput.SetValue("my feature")
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	if !d.worktreeEnabled {
+		t.Error("w on the collapsed tool field should toggle worktree on")
 	}
 }
 
-// TestNewDialog_TypingResetsSuggestionNavigation tests that typing after
-// navigating suggestions resets the navigation state.
-func TestNewDialog_TypingResetsSuggestionNavigation(t *testing.T) {
+func TestNewDialog_View_CollapsedTool(t *testing.T) {
+	d := NewNewDialog()
+	d.SetDefaultTool("claude")
+	d.SetSize(80, 40)
+	d.Show()
+
+	view := d.View()
+
+	if !strings.Contains(view, "Tool:") {
+		t.Error("collapsed tool should show 'Tool:' label")
+	}
+	if !strings.Contains(view, "t to change") {
+		t.Error("collapsed tool should show '(t to change)' hint")
+	}
+}
+
+// ===== Collapsed Options Tests =====
+
+func TestNewDialog_OptionsCollapsed_ByDefault(t *testing.T) {
 	d := NewNewDialog()
 	d.Show()
 
-	suggestions := []string{
-		"/Users/test/project-1",
-		"/Users/test/project-2",
+	if d.optionsExpanded {
+		t.Error("options should be collapsed by default")
 	}
-	d.SetPathSuggestions(suggestions)
+}
 
-	d.focusIndex = 1
-	d.updateFocus()
+func TestNewDialog_OptionsToggle_AKey(t *testing.T) {
+	d := NewNewDialog()
+	d.commandCursor = 1 // claude
+	d.updateToolOptions()
+	d.Show()
 
-	// User navigates to a suggestion
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	// Move focus to command field with non-shell cursor so isTextInputFocused() returns false
+	d.focusIndex = 2
+	d.toolExpanded = true
 
-	// Verify navigation flag is set
-	if !d.suggestionNavigated {
-		t.Error("suggestionNavigated should be true after Ctrl+N")
-	}
-
-	// User then types something new - simulate by sending a key
 	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-
-	// Flag should be reset
-	if d.suggestionNavigated {
-		t.Error("suggestionNavigated should be false after typing")
+	if !d.optionsExpanded {
+		t.Error("'a' should expand options")
 	}
 
-	// Set a custom path and press Tab
-	d.pathInput.SetValue("/my/new/path")
-	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyTab})
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if d.optionsExpanded {
+		t.Error("'a' again should collapse options")
+	}
+}
 
-	_, path, _ := d.GetValues()
+func TestNewDialog_View_CollapsedOptions_ShowsSummary(t *testing.T) {
+	d := NewNewDialog()
+	d.commandCursor = 1 // claude
+	d.updateToolOptions()
+	d.SetSize(80, 40)
+	d.Show()
 
-	if path != "/my/new/path" {
-		t.Errorf("Typing should reset suggestion navigation\nGot: %q\nWant: %q", path, "/my/new/path")
+	view := d.View()
+
+	if !strings.Contains(view, "a for advanced") {
+		t.Error("collapsed options should show '(a for advanced)' hint")
+	}
+}
+
+// ===== Claude Options SummaryView Tests =====
+
+func TestClaudeOptionsPanel_SummaryView_Defaults(t *testing.T) {
+	p := NewClaudeOptionsPanel()
+	if p.SummaryView() != "defaults" {
+		t.Errorf("SummaryView = %q, want 'defaults'", p.SummaryView())
+	}
+}
+
+func TestClaudeOptionsPanel_SummaryView_SkipPerms(t *testing.T) {
+	p := NewClaudeOptionsPanel()
+	p.skipPermissions = true
+	s := p.SummaryView()
+	if !strings.Contains(s, "skip-perms") {
+		t.Errorf("SummaryView = %q, want to contain 'skip-perms'", s)
+	}
+}
+
+func TestClaudeOptionsPanel_SummaryView_Multiple(t *testing.T) {
+	p := NewClaudeOptionsPanel()
+	p.skipPermissions = true
+	p.useChrome = true
+	s := p.SummaryView()
+	if s != "skip-perms, chrome" {
+		t.Errorf("SummaryView = %q, want 'skip-perms, chrome'", s)
+	}
+}
+
+func TestClaudeOptionsPanel_SummaryView_ContinueMode(t *testing.T) {
+	p := NewClaudeOptionsPanel()
+	p.sessionMode = 1 // continue
+	s := p.SummaryView()
+	if !strings.Contains(s, "continue") {
+		t.Errorf("SummaryView = %q, want to contain 'continue'", s)
 	}
 }
 
@@ -396,7 +585,6 @@ func TestNewDialog_GetValuesWithWorktree(t *testing.T) {
 	if path != "/tmp/project" {
 		t.Errorf("Path: got %q, want %q", path, "/tmp/project")
 	}
-	// command should be empty or shell when commandCursor is 0
 	_ = command
 }
 
@@ -410,7 +598,6 @@ func TestNewDialog_GetValuesWithWorktree_Disabled(t *testing.T) {
 	if enabled {
 		t.Error("worktreeEnabled should be false")
 	}
-	// Branch value is still returned even when disabled
 	if branch != "feature/test" {
 		t.Errorf("Branch: got %q, want %q", branch, "feature/test")
 	}
@@ -466,7 +653,7 @@ func TestNewDialog_Validate_WorktreeDisabled_IgnoresBranch(t *testing.T) {
 	dialog.nameInput.SetValue("test-session")
 	dialog.pathInput.SetValue("/tmp/project")
 	dialog.worktreeEnabled = false
-	dialog.branchInput.SetValue("") // Empty branch, but worktree disabled
+	dialog.branchInput.SetValue("")
 
 	err := dialog.Validate()
 	if err != "" {
@@ -494,7 +681,6 @@ func TestNewDialog_ShowInGroup_SetsDefaultPath(t *testing.T) {
 
 	dialog.ShowInGroup("projects", "Projects", "/test/default/path")
 
-	// Verify path input is set to the default path
 	if dialog.pathInput.Value() != "/test/default/path" {
 		t.Errorf("pathInput should be set to default path, got: %q", dialog.pathInput.Value())
 	}
@@ -505,9 +691,6 @@ func TestNewDialog_ShowInGroup_EmptyDefaultPath(t *testing.T) {
 
 	dialog.ShowInGroup("projects", "Projects", "")
 
-	// With empty default path, it should fall back to current working directory
-	// We can't test the exact value, but we can verify it's not empty
-	// (assuming we're not in a system temp directory)
 	value := dialog.pathInput.Value()
 	if value == "" {
 		t.Error("pathInput should not be empty when defaultPath is empty (should use cwd)")
@@ -517,7 +700,6 @@ func TestNewDialog_ShowInGroup_EmptyDefaultPath(t *testing.T) {
 func TestNewDialog_BranchInputInitialized(t *testing.T) {
 	dialog := NewNewDialog()
 
-	// Verify branch input is properly initialized
 	if dialog.branchInput.Placeholder != "feature/branch-name" {
 		t.Errorf("branchInput placeholder: got %q, want %q",
 			dialog.branchInput.Placeholder, "feature/branch-name")
@@ -527,21 +709,19 @@ func TestNewDialog_BranchInputInitialized(t *testing.T) {
 func TestNewDialog_WorktreeToggle_ViaKeyPress(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
-	dialog.focusIndex = 2 // Command field
+	dialog.toolExpanded = true // must be expanded to use 'w'
+	dialog.focusIndex = 2      // Command field
 
-	// Press 'w' to toggle worktree
 	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 
 	if !dialog.worktreeEnabled {
 		t.Error("Worktree should be enabled after pressing 'w' on command field")
 	}
 
-	// Focus should move to branch field
 	if dialog.focusIndex != 3 {
 		t.Errorf("Focus should move to branch field (3), got %d", dialog.focusIndex)
 	}
 
-	// Press 'w' again to disable (need to be on command field)
 	dialog.focusIndex = 2
 	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 
@@ -550,71 +730,19 @@ func TestNewDialog_WorktreeToggle_ViaKeyPress(t *testing.T) {
 	}
 }
 
-func TestNewDialog_TabNavigationWithWorktree(t *testing.T) {
-	dialog := NewNewDialog()
-	dialog.Show()
-	dialog.focusIndex = 0
-	dialog.worktreeEnabled = true
-
-	// Tab through all fields: 0 -> 1 -> 2 -> 3 -> 0
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 1 {
-		t.Errorf("After first Tab, focusIndex = %d, want 1", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 2 {
-		t.Errorf("After second Tab, focusIndex = %d, want 2", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 3 {
-		t.Errorf("After third Tab, focusIndex = %d, want 3 (branch field)", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 0 {
-		t.Errorf("After fourth Tab, focusIndex = %d, want 0 (wrap around)", dialog.focusIndex)
-	}
-}
-
-func TestNewDialog_TabNavigationWithoutWorktree(t *testing.T) {
-	dialog := NewNewDialog()
-	dialog.Show()
-	dialog.focusIndex = 0
-	dialog.worktreeEnabled = false
-
-	// Tab through fields: 0 -> 1 -> 2 -> 0 (no branch field)
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 1 {
-		t.Errorf("After first Tab, focusIndex = %d, want 1", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 2 {
-		t.Errorf("After second Tab, focusIndex = %d, want 2", dialog.focusIndex)
-	}
-
-	dialog, _ = dialog.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if dialog.focusIndex != 0 {
-		t.Errorf("After third Tab, focusIndex = %d, want 0 (wrap around, skip branch)", dialog.focusIndex)
-	}
-}
-
 func TestNewDialog_View_ShowsWorktreeCheckbox(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.SetSize(80, 40)
 	dialog.Show()
-	dialog.focusIndex = 2 // Command field
+	dialog.toolExpanded = true // worktree checkbox only visible when tool expanded
+	dialog.focusIndex = 2
 
 	view := dialog.View()
 
-	// Should show worktree checkbox
 	if !strings.Contains(view, "Create in worktree") {
 		t.Error("View should contain 'Create in worktree' checkbox")
 	}
 
-	// Should show hint when on command field
 	if !strings.Contains(view, "press w") {
 		t.Error("View should contain 'press w' hint when on command field")
 	}
@@ -628,12 +756,10 @@ func TestNewDialog_View_ShowsBranchInputWhenEnabled(t *testing.T) {
 
 	view := dialog.View()
 
-	// Should show branch input
 	if !strings.Contains(view, "Branch:") {
 		t.Error("View should contain 'Branch:' label when worktree enabled")
 	}
 
-	// Checkbox should be checked
 	if !strings.Contains(view, "[x]") {
 		t.Error("View should show checked checkbox [x] when worktree enabled")
 	}
@@ -643,22 +769,21 @@ func TestNewDialog_View_HidesBranchInputWhenDisabled(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.SetSize(80, 40)
 	dialog.Show()
+	dialog.toolExpanded = true // checkbox only shown when expanded
 	dialog.worktreeEnabled = false
 
 	view := dialog.View()
 
-	// Should NOT show branch input label
 	if strings.Contains(view, "Branch:") {
 		t.Error("View should NOT contain 'Branch:' label when worktree disabled")
 	}
 
-	// Checkbox should be unchecked
 	if !strings.Contains(view, "[ ]") {
 		t.Error("View should show unchecked checkbox [ ] when worktree disabled")
 	}
 }
 
-// ===== CharLimit & Inline Error Tests (Issue #93) =====
+// ===== CharLimit & Inline Error Tests =====
 
 func TestNewDialog_CharLimitMatchesMaxNameLength(t *testing.T) {
 	d := NewNewDialog()
@@ -670,17 +795,14 @@ func TestNewDialog_CharLimitMatchesMaxNameLength(t *testing.T) {
 func TestNewDialog_CharLimitTruncatesLongNames(t *testing.T) {
 	d := NewNewDialog()
 	d.pathInput.SetValue("/tmp/project")
-	// Try to set a name longer than MaxNameLength via textinput
 	longName := strings.Repeat("a", MaxNameLength+10)
 	d.nameInput.SetValue(longName)
 
-	// CharLimit should truncate the value to MaxNameLength
 	actual := d.nameInput.Value()
 	if len(actual) > MaxNameLength {
 		t.Errorf("nameInput should truncate to MaxNameLength (%d), but got length %d", MaxNameLength, len(actual))
 	}
 
-	// Validation should pass since the textinput truncated
 	err := d.Validate()
 	if err != "" {
 		t.Errorf("Validate() should pass after CharLimit truncation, got: %q", err)
@@ -742,7 +864,6 @@ func TestNewDialog_ToggleWorktree_AutoPopulatesBranch(t *testing.T) {
 	d := NewNewDialog()
 	d.nameInput.SetValue("amber-falcon")
 
-	// Toggling worktree ON should auto-populate branch from session name
 	d.ToggleWorktree()
 
 	if !d.worktreeEnabled {
@@ -756,9 +877,33 @@ func TestNewDialog_ToggleWorktree_AutoPopulatesBranch(t *testing.T) {
 	}
 }
 
+func TestNewDialog_AutoBranch_ConfigurablePrefix(t *testing.T) {
+	d := NewNewDialog()
+
+	// Custom prefix is applied and the session name is sanitized into a valid branch.
+	d.branchPrefix = "wip/"
+	d.nameInput.SetValue("Dark Mode Toggle")
+	d.autoBranchFromName()
+	got := d.branchInput.Value()
+	if !strings.HasPrefix(got, "wip/") {
+		t.Errorf("branch %q should start with configured prefix %q", got, "wip/")
+	}
+	if strings.ContainsAny(got, " ") {
+		t.Errorf("branch %q should be sanitized (no spaces)", got)
+	}
+
+	// Empty prefix disables prefixing (just the sanitized name).
+	d.branchPrefix = ""
+	d.branchAutoSet = true
+	d.nameInput.SetValue("hotfix")
+	d.autoBranchFromName()
+	if got := d.branchInput.Value(); got != "hotfix" {
+		t.Errorf("empty prefix: branch = %q, want %q", got, "hotfix")
+	}
+}
+
 func TestNewDialog_ToggleWorktree_EmptyName_NoBranch(t *testing.T) {
 	d := NewNewDialog()
-	// Name is empty
 
 	d.ToggleWorktree()
 
@@ -775,5 +920,62 @@ func TestNewDialog_ShowInGroup_ResetsBranchAutoSet(t *testing.T) {
 
 	if d.branchAutoSet {
 		t.Error("branchAutoSet should be reset to false on ShowInGroup")
+	}
+}
+
+// ===== Text Input Guard Regression Tests =====
+
+func TestNewDialog_TKey_DoesNotExpandTool_WhenNameFocused(t *testing.T) {
+	d := NewNewDialog()
+	d.SetDefaultTool("claude")
+	d.Show() // focusIndex=0 (name field)
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+
+	if d.toolExpanded {
+		t.Error("'t' should NOT expand tool picker when name field is focused")
+	}
+}
+
+func TestNewDialog_AKey_DoesNotToggleOptions_WhenNameFocused(t *testing.T) {
+	d := NewNewDialog()
+	d.commandCursor = 1 // claude
+	d.updateToolOptions()
+	d.Show() // focusIndex=0 (name field)
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+
+	if d.optionsExpanded {
+		t.Error("'a' should NOT toggle options when name field is focused")
+	}
+}
+
+func TestNewDialog_TKey_TypesIntoPathInput(t *testing.T) {
+	d := NewNewDialog()
+	d.SetPathSuggestions([]string{"/a", "/b"})
+	d.Show()
+	d.focusIndex = 1
+	d.pathInput.SetValue("")
+	d.pathInput.Focus()
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+
+	if d.pathInput.Value() != "t" {
+		t.Errorf("'t' should type into path input, got %q", d.pathInput.Value())
+	}
+}
+
+func TestNewDialog_AKey_TypesIntoPathInput(t *testing.T) {
+	d := NewNewDialog()
+	d.SetPathSuggestions([]string{"/a", "/b"})
+	d.Show()
+	d.focusIndex = 1
+	d.pathInput.SetValue("")
+	d.pathInput.Focus()
+
+	d, _ = d.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+
+	if d.pathInput.Value() != "a" {
+		t.Errorf("'a' should type into path input, got %q", d.pathInput.Value())
 	}
 }

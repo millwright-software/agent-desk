@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
+	"github.com/millwright-software/agent-desk/internal/statedb"
 )
 
 // newTestStorage creates a Storage backed by an in-memory-like temp dir SQLite database.
@@ -182,5 +182,34 @@ func TestLoadLiteEmptyDB(t *testing.T) {
 	}
 	if len(groupData) != 0 {
 		t.Errorf("Expected empty groups, got %d", len(groupData))
+	}
+}
+
+// TestLastLogActivityPersists guards the recency regression: the "last
+// interacted" transcript-mtime must survive a save→load cycle so that a reload
+// (e.g. triggered by reordering) doesn't blank recency for every session.
+func TestLastLogActivityPersists(t *testing.T) {
+	s := newTestStorage(t)
+	want := time.Unix(1750001234, 0)
+
+	in := &Instance{
+		ID: "log-1", Title: "S", ProjectPath: "/tmp/x", GroupPath: "g",
+		Tool: "claude", Status: StatusIdle, CreatedAt: time.Unix(1740000000, 0),
+	}
+	in.lastLogActivityAt = want
+
+	if err := s.SaveWithGroups([]*Instance{in}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, _, err := s.LoadLite()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(loaded))
+	}
+	if !loaded[0].LastLogActivityAt.Equal(want) {
+		t.Errorf("LastLogActivityAt after reload = %v, want %v", loaded[0].LastLogActivityAt, want)
 	}
 }

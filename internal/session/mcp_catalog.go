@@ -10,8 +10,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
-	"github.com/asheshgoplani/agent-deck/internal/mcppool"
+	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/mcppool"
 )
 
 var mcpCatLog = logging.ForComponent(logging.CompMCP)
@@ -29,7 +29,7 @@ type MCPServerConfig struct {
 // getExternalSocketPath returns the socket path if an external pool socket exists and is alive
 // This allows CLI commands to use sockets created by the TUI without needing pool initialization
 func getExternalSocketPath(mcpName string) string {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("agentdeck-mcp-%s.sock", mcpName))
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("agentdesk-mcp-%s.sock", mcpName))
 
 	// Check if socket file exists
 	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
@@ -61,7 +61,7 @@ func tryPoolSocket(pool *mcppool.Pool, name, scope string) (MCPServerConfig, boo
 			socketPath := pool.GetSocketPath(name)
 			mcpCatLog.Info("transport_socket", slog.String("mcp", name), slog.String("scope", scope), slog.String("socket", socketPath))
 			return MCPServerConfig{
-				Command: "agent-deck",
+				Command: "agent-desk",
 				Args:    []string{"mcp-proxy", socketPath},
 			}, true
 		}
@@ -73,7 +73,7 @@ func tryPoolSocket(pool *mcppool.Pool, name, scope string) (MCPServerConfig, boo
 				slog.String("socket", socketPath),
 				slog.String("detail", "pool.IsRunning=false but socket alive on disk, using disk socket"))
 			return MCPServerConfig{
-				Command: "agent-deck",
+				Command: "agent-desk",
 				Args:    []string{"mcp-proxy", socketPath},
 			}, true
 		}
@@ -104,7 +104,7 @@ func tryPoolSocket(pool *mcppool.Pool, name, scope string) (MCPServerConfig, boo
 			if socketPath := getExternalSocketPath(name); socketPath != "" {
 				mcpCatLog.Info("external_socket_discovered", slog.String("mcp", name), slog.String("scope", scope), slog.String("socket", socketPath))
 				return MCPServerConfig{
-					Command: "agent-deck",
+					Command: "agent-desk",
 					Args:    []string{"mcp-proxy", socketPath},
 				}, true
 			}
@@ -141,16 +141,16 @@ func readExistingLocalMCPServers(mcpFile string) map[string]json.RawMessage {
 }
 
 // WriteMCPJsonFromConfig writes enabled MCPs from config.toml to project's .mcp.json
-// It preserves any existing entries not managed by agent-deck (not defined in config.toml)
+// It preserves any existing entries not managed by agent-desk (not defined in config.toml)
 func WriteMCPJsonFromConfig(projectPath string, enabledNames []string) error {
 	mcpFile := filepath.Join(projectPath, ".mcp.json")
 	availableMCPs := GetAvailableMCPs()
 	pool := GetGlobalPool() // Get pool instance (may be nil)
 
-	// Read existing .mcp.json to preserve entries not managed by agent-deck (#146)
+	// Read existing .mcp.json to preserve entries not managed by agent-desk (#146)
 	existingServers := readExistingLocalMCPServers(mcpFile)
 
-	// Build agent-deck managed MCP entries
+	// Build agent-desk managed MCP entries
 	agentDeckServers := make(map[string]MCPServerConfig)
 
 	for _, name := range enabledNames {
@@ -203,7 +203,7 @@ func WriteMCPJsonFromConfig(projectPath string, enabledNames []string) error {
 		}
 	}
 
-	// Merge: preserve non-agent-deck entries, then add agent-deck entries (#146)
+	// Merge: preserve non-agent-desk entries, then add agent-desk entries (#146)
 	mergedServers := make(map[string]json.RawMessage)
 	for name, raw := range existingServers {
 		if _, managed := availableMCPs[name]; !managed {
@@ -315,7 +315,7 @@ func WriteGlobalMCP(enabledNames []string) error {
 		}
 	}
 
-	// Merge: preserve non-agent-deck entries from existing config (#146)
+	// Merge: preserve non-agent-desk entries from existing config (#146)
 	mergedMCPs := make(map[string]interface{})
 	if existingMCPs, ok := rawConfig["mcpServers"].(map[string]interface{}); ok {
 		for name, cfg := range existingMCPs {
@@ -539,7 +539,7 @@ func WriteUserMCP(enabledNames []string) error {
 		}
 	}
 
-	// Merge: preserve non-agent-deck entries from existing config (#146)
+	// Merge: preserve non-agent-desk entries from existing config (#146)
 	mergedMCPs := make(map[string]interface{})
 	if existingMCPs, ok := rawConfig["mcpServers"].(map[string]interface{}); ok {
 		for name, cfg := range existingMCPs {

@@ -19,7 +19,7 @@ func skipIfNoOpenCodeFullflow(t *testing.T) {
 	}
 }
 
-// TestOpenCodeFullFlowSimulation simulates what happens when agent-deck loads
+// TestOpenCodeFullFlowSimulation simulates what happens when agent-desk loads
 // sessions and triggers detection
 func TestOpenCodeFullFlowSimulation(t *testing.T) {
 	skipIfNoOpenCodeFullflow(t)

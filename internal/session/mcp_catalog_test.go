@@ -230,10 +230,10 @@ func TestGetProjectMCPNames(t *testing.T) {
 }
 
 func TestMCPServerConfigSocketProxy(t *testing.T) {
-	// Verify that socket-proxied MCPs use agent-deck mcp-proxy, not nc
+	// Verify that socket-proxied MCPs use agent-desk mcp-proxy, not nc
 	config := MCPServerConfig{
-		Command: "agent-deck",
-		Args:    []string{"mcp-proxy", "/tmp/agentdeck-mcp-test.sock"},
+		Command: "agent-desk",
+		Args:    []string{"mcp-proxy", "/tmp/agentdesk-mcp-test.sock"},
 	}
 
 	data, err := json.Marshal(config)
@@ -246,8 +246,8 @@ func TestMCPServerConfigSocketProxy(t *testing.T) {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
 
-	if parsed.Command != "agent-deck" {
-		t.Errorf("Expected command 'agent-deck', got %q", parsed.Command)
+	if parsed.Command != "agent-desk" {
+		t.Errorf("Expected command 'agent-desk', got %q", parsed.Command)
 	}
 	if len(parsed.Args) != 2 || parsed.Args[0] != "mcp-proxy" {
 		t.Errorf("Expected args ['mcp-proxy', socket-path], got %v", parsed.Args)

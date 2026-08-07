@@ -19,7 +19,7 @@ func TestGetDirectoryCompletions(t *testing.T) {
 		"projects",
 		"playground",
 		"personal",
-		"work/agent-deck",
+		"work/agent-desk",
 		"work/other",
 	}
 	for _, d := range dirs {
@@ -50,7 +50,7 @@ func TestGetDirectoryCompletions(t *testing.T) {
 		{
 			name:     "Nested absolute path",
 			input:    filepath.Join(tmpDir, "work/a"),
-			expected: []string{filepath.Join(tmpDir, "work/agent-deck")},
+			expected: []string{filepath.Join(tmpDir, "work/agent-desk")},
 		},
 		{
 			name:     "No matches",
@@ -65,7 +65,7 @@ func TestGetDirectoryCompletions(t *testing.T) {
 		{
 			name:     "Trailing slash lists directory contents",
 			input:    filepath.Join(tmpDir, "work") + string(os.PathSeparator),
-			expected: []string{filepath.Join(tmpDir, "work/agent-deck"), filepath.Join(tmpDir, "work/other")},
+			expected: []string{filepath.Join(tmpDir, "work/agent-desk"), filepath.Join(tmpDir, "work/other")},
 		},
 	}
 
@@ -78,33 +78,4 @@ func TestGetDirectoryCompletions(t *testing.T) {
 			assert.Equal(t, tt.expected, results)
 		})
 	}
-}
-
-func TestCompletionCycler(t *testing.T) {
-	cycler := &CompletionCycler{}
-
-	// 1. Initial state
-	assert.Equal(t, "", cycler.Next())
-
-	// 2. Set matches and cycle
-	matches := []string{"/a", "/b", "/c"}
-	cycler.SetMatches(matches)
-	assert.True(t, cycler.IsActive())
-
-	assert.Equal(t, "/a", cycler.Next())
-	assert.Equal(t, "/b", cycler.Next())
-	assert.Equal(t, "/c", cycler.Next())
-
-	// 3. Wrap around
-	assert.Equal(t, "/a", cycler.Next())
-
-	// 4. Reset
-	cycler.Reset()
-	assert.False(t, cycler.IsActive())
-	assert.Equal(t, "", cycler.Next())
-
-	// 5. Change matches
-	cycler.SetMatches([]string{"/x"})
-	assert.Equal(t, "/x", cycler.Next())
-	assert.Equal(t, "/x", cycler.Next())
 }

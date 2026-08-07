@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 // SessionPickerDialog presents a list of sessions for the user to select from.
@@ -184,7 +184,7 @@ func statusIndicator(status session.Status) string {
 	case session.StatusRunning:
 		return lipgloss.NewStyle().Foreground(ColorGreen).Render("●")
 	case session.StatusWaiting:
-		return lipgloss.NewStyle().Foreground(ColorYellow).Render("◐")
+		return lipgloss.NewStyle().Foreground(ColorOrange).Render("●")
 	case session.StatusIdle:
 		return lipgloss.NewStyle().Foreground(ColorTextDim).Render("○")
 	default:

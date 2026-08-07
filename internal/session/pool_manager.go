@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
-	"github.com/asheshgoplani/agent-deck/internal/mcppool"
-	"github.com/asheshgoplani/agent-deck/internal/platform"
+	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/mcppool"
+	"github.com/millwright-software/agent-desk/internal/platform"
 )
 
 var (
@@ -80,7 +80,7 @@ func InitializeGlobalPool(ctx context.Context, config *UserConfig, sessions []*I
 		return nil, err
 	}
 
-	// FIRST: Discover existing sockets from another agent-deck instance
+	// FIRST: Discover existing sockets from another agent-desk instance
 	// This allows multiple TUI instances to share the same pool
 	discovered := pool.DiscoverExistingSockets()
 	if discovered > 0 {

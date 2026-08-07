@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 )
 
 var httpPoolLog = logging.ForComponent(logging.CompHTTP)

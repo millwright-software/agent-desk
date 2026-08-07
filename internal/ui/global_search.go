@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/millwright-software/agent-desk/internal/session"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -46,8 +46,8 @@ type GlobalSearchResult struct {
 	ModTime     time.Time // Last modified time
 	Score       int       // Fuzzy match score (higher = better match)
 	MatchCount  int       // Number of query matches in content
-	InAgentDeck bool      // True if this session is already in Agent Deck
-	InstanceID  string    // Agent Deck instance ID if exists
+	InAgentDesk bool      // True if this session is already in Agent Desk
+	InstanceID  string    // Agent Desk instance ID if exists
 }
 
 // globalSearchResultsMsg delivers async search results back to the UI
@@ -77,6 +77,8 @@ type GlobalSearch struct {
 	query         string // Current search query for highlighting
 	searching     bool   // True while async search is in flight
 
+	sidebarWidthPercent int // Sidebar width for consistent layout with home view
+
 	// Index reference (set by Home)
 	index *session.GlobalSearchIndex
 }
@@ -96,6 +98,9 @@ func NewGlobalSearch() *GlobalSearch {
 		visible: false,
 	}
 }
+
+// SetSidebarWidth sets the sidebar width for consistent layout
+func (gs *GlobalSearch) SetSidebarWidth(w int) { gs.sidebarWidthPercent = w }
 
 // SetIndex sets the search index reference
 func (gs *GlobalSearch) SetIndex(index *session.GlobalSearchIndex) {
@@ -342,7 +347,11 @@ func (gs *GlobalSearch) View() string {
 	if totalWidth < 100 {
 		totalWidth = 100
 	}
-	leftWidth := totalWidth * 35 / 100       // 35% for results
+	widthPercent := gs.sidebarWidthPercent
+	if widthPercent < 15 || widthPercent > 50 {
+		widthPercent = 35
+	}
+	leftWidth := totalWidth * widthPercent / 100 // configurable for results
 	rightWidth := totalWidth - leftWidth - 3 // Rest for preview (minus border)
 
 	previewHeight := gs.height - 12 // Leave room for header, input, hints
@@ -401,7 +410,7 @@ func (gs *GlobalSearch) View() string {
 
 			// Build line
 			prefix := "  "
-			if result.InAgentDeck {
+			if result.InAgentDesk {
 				prefix = "• "
 			}
 
@@ -669,8 +678,8 @@ func (gs *GlobalSearch) highlightMatches(text, query string) string {
 	return result.String()
 }
 
-// MarkInAgentDeck marks which results are already in Agent Deck
-func (gs *GlobalSearch) MarkInAgentDeck(instances []*session.Instance) {
+// MarkInAgentDesk marks which results are already in Agent Desk
+func (gs *GlobalSearch) MarkInAgentDesk(instances []*session.Instance) {
 	idMap := make(map[string]string) // sessionID -> instanceID
 	for _, inst := range instances {
 		if inst.ClaudeSessionID != "" {
@@ -680,7 +689,7 @@ func (gs *GlobalSearch) MarkInAgentDeck(instances []*session.Instance) {
 
 	for _, result := range gs.results {
 		if instID, ok := idMap[result.SessionID]; ok {
-			result.InAgentDeck = true
+			result.InAgentDesk = true
 			result.InstanceID = instID
 		}
 	}

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/asheshgoplani/agent-deck/internal/tmux"
+	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
 // DiscoverExistingTmuxSessions finds all tmux sessions and converts them to instances
@@ -32,14 +32,14 @@ func DiscoverExistingTmuxSessions(existingInstances []*Instance) ([]*Instance, e
 			continue
 		}
 
-		// For orphaned agent-deck sessions, extract the original title from the tmux name
-		// Format: agentdeck_<title>_<hash> -> extract <title>
+		// For orphaned agent-desk sessions, extract the original title from the tmux name
+		// Format: agentdesk_<title>_<hash> -> extract <title>
 		title := sess.DisplayName
 		groupPath := ""
 		isOrphaned := false
 		if strings.HasPrefix(sess.Name, tmux.SessionPrefix) {
 			isOrphaned = true
-			// Extract title from session name: agentdeck_<title>_<8-char-hash>
+			// Extract title from session name: agentdesk_<title>_<8-char-hash>
 			namePart := strings.TrimPrefix(sess.Name, tmux.SessionPrefix)
 			if lastUnderscore := strings.LastIndex(namePart, "_"); lastUnderscore > 0 {
 				title = namePart[:lastUnderscore]
@@ -60,10 +60,10 @@ func DiscoverExistingTmuxSessions(existingInstances []*Instance) ([]*Instance, e
 		// Ignore errors - non-fatal, older tmux versions may not support all options
 		_ = sess.EnableMouseMode()
 
-		// Determine tool type - for orphaned agent-deck sessions, assume claude (most common)
+		// Determine tool type - for orphaned agent-desk sessions, assume claude (most common)
 		tool := detectToolFromName(title)
 		if isOrphaned && tool == "shell" {
-			tool = "claude" // Most agent-deck sessions are Claude sessions
+			tool = "claude" // Most agent-desk sessions are Claude sessions
 		}
 
 		inst := &Instance{
@@ -157,6 +157,9 @@ func detectToolFromName(name string) string {
 	}
 	if strings.Contains(nameLower, "codex") {
 		return "codex"
+	}
+	if strings.Contains(nameLower, "copilot") {
+		return "copilot"
 	}
 
 	return "shell"

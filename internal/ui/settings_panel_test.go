@@ -3,8 +3,8 @@ package ui
 import (
 	"testing"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 func TestSettingsPanel_InitialState(t *testing.T) {
@@ -112,8 +112,9 @@ func TestSettingsPanel_LoadConfig_DefaultTool(t *testing.T) {
 		{"gemini", "gemini", 1},
 		{"opencode", "opencode", 2},
 		{"codex", "codex", 3},
-		{"empty", "", 4}, // None
-		{"unknown", "unknown-tool", 4},
+		{"empty", "", 5}, // None (last entry, after copilot)
+		{"unknown", "unknown-tool", 5},
+		{"copilot", "copilot", 4},
 	}
 
 	for _, tt := range tests {
@@ -224,7 +225,8 @@ func TestSettingsPanel_GetConfig_ToolMapping(t *testing.T) {
 		{"gemini", 1, "gemini"},
 		{"opencode", 2, "opencode"},
 		{"codex", 3, "codex"},
-		{"none", 4, ""},
+		{"copilot", 4, "copilot"},
+		{"none", 5, ""},
 	}
 
 	for _, tt := range tests {

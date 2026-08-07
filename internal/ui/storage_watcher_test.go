@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
+	"github.com/millwright-software/agent-desk/internal/statedb"
 	"github.com/stretchr/testify/require"
 )
 

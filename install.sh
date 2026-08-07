@@ -1,20 +1,20 @@
 #!/bin/bash
 #
-# Agent Deck Installer
-# https://github.com/asheshgoplani/agent-deck
+# Agent Desk Installer
+# https://github.com/millwright-software/agent-desk
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/millwright-software/agent-desk/main/install.sh | bash
 #
 # Options:
-#   --name <name>       Custom binary name (default: agent-deck)
+#   --name <name>       Custom binary name (default: agent-desk)
 #   --dir <path>        Installation directory (default: ~/.local/bin)
 #   --version <ver>     Specific version (default: latest)
 #   --skip-tmux-config  Skip tmux configuration prompt
 #   --non-interactive   Skip all prompts (for CI/automated installs)
 #
 # The installer will:
-#   1. Download and install the agent-deck binary
+#   1. Download and install the agent-desk binary
 #   2. Check for tmux (offer to install if missing) - REQUIRED
 #   3. Check for jq (offer to install if missing) - Optional, for session forking
 #   4. Configure ~/.tmux.conf for mouse scrolling & clipboard - Optional
@@ -35,10 +35,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Defaults
-BINARY_NAME="agent-deck"
+BINARY_NAME="agent-desk"
 INSTALL_DIR="${HOME}/.local/bin"
 VERSION="latest"
-REPO="asheshgoplani/agent-deck"
+REPO="millwright-software/agent-desk"
 SKIP_TMUX_CONFIG=false
 SKIP_OPTIONAL_DEPS=false
 
@@ -67,12 +67,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            echo "Agent Deck Installer"
+            echo "Agent Desk Installer"
             echo ""
             echo "Usage: install.sh [options]"
             echo ""
             echo "Options:"
-            echo "  --name <name>       Custom binary name (default: agent-deck)"
+            echo "  --name <name>       Custom binary name (default: agent-desk)"
             echo "  --dir <path>        Installation directory (default: ~/.local/bin)"
             echo "  --version <ver>     Specific version (default: latest)"
             echo "  --skip-tmux-config  Skip tmux configuration prompt"
@@ -88,7 +88,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║        Agent Deck Installer            ║${NC}"
+echo -e "${BLUE}║        Agent Desk Installer            ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -106,7 +106,7 @@ case "$OS" in
         ;;
     *)
         echo -e "${RED}Error: Unsupported operating system: $OS${NC}"
-        echo "Agent Deck only supports macOS and Linux."
+        echo "Agent Desk only supports macOS and Linux."
         exit 1
         ;;
 esac
@@ -131,7 +131,7 @@ fi
 # Check for tmux and offer to install
 if ! command -v tmux &> /dev/null; then
     echo -e "${YELLOW}tmux is not installed.${NC}"
-    echo "Agent Deck requires tmux to function."
+    echo "Agent Desk requires tmux to function."
     echo ""
 
     # Try to auto-install tmux
@@ -257,7 +257,7 @@ VERSION_NUM="${VERSION#v}"
 echo -e "Installing version: ${GREEN}${VERSION}${NC}"
 
 # Download URL
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/agent-deck_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/agent-desk_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
 echo -e "Downloading from: ${BLUE}${DOWNLOAD_URL}${NC}"
 
 # Create temp directory
@@ -266,7 +266,7 @@ trap "rm -rf $TMP_DIR" EXIT
 
 # Download and extract
 echo -e "Downloading..."
-if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/agent-deck.tar.gz"; then
+if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/agent-desk.tar.gz"; then
     echo -e "${RED}Error: Download failed${NC}"
     echo "URL: $DOWNLOAD_URL"
     echo ""
@@ -277,19 +277,19 @@ if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/agent-deck.tar.gz"; then
     echo ""
     echo "Try building from source instead:"
     echo "  git clone https://github.com/${REPO}.git"
-    echo "  cd agent-deck && make install"
+    echo "  cd agent-desk && make install"
     exit 1
 fi
 
 echo -e "Extracting..."
-tar -xzf "$TMP_DIR/agent-deck.tar.gz" -C "$TMP_DIR"
+tar -xzf "$TMP_DIR/agent-desk.tar.gz" -C "$TMP_DIR"
 
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
 # Install binary
 echo -e "Installing to ${GREEN}${INSTALL_DIR}/${BINARY_NAME}${NC}"
-mv "$TMP_DIR/agent-deck" "$INSTALL_DIR/$BINARY_NAME"
+mv "$TMP_DIR/agent-desk" "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
 # Check if install directory is in PATH
@@ -311,11 +311,11 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo ""
 fi
 
-# Configure tmux for optimal agent-deck experience
+# Configure tmux for optimal agent-desk experience
 configure_tmux() {
     local TMUX_CONF="$HOME/.tmux.conf"
-    local MARKER="# agent-deck configuration"
-    local VERSION_MARKER="# agent-deck-tmux-config-version:"
+    local MARKER="# agent-desk configuration"
+    local VERSION_MARKER="# agent-desk-tmux-config-version:"
     local CURRENT_VERSION="2"  # Bump this when config changes
     local NEEDS_UPDATE=false
     local HAS_CONFIG=false
@@ -330,7 +330,7 @@ configure_tmux() {
             echo ""
             echo -e "${YELLOW}tmux config update available!${NC}"
             if [[ -z "$INSTALLED_VERSION" ]]; then
-                echo "Your current agent-deck tmux config is from an older version."
+                echo "Your current agent-desk tmux config is from an older version."
             else
                 echo "Installed version: $INSTALLED_VERSION, Available: $CURRENT_VERSION"
             fi
@@ -351,18 +351,18 @@ configure_tmux() {
             echo "Removing old configuration..."
             # Use temp file for compatibility (BSD sed vs GNU sed)
             local TEMP_CONF=$(mktemp)
-            sed "/$MARKER/,/# End agent-deck configuration/d" "$TMUX_CONF" > "$TEMP_CONF"
+            sed "/$MARKER/,/# End agent-desk configuration/d" "$TMUX_CONF" > "$TEMP_CONF"
             mv "$TEMP_CONF" "$TMUX_CONF"
             echo -e "${GREEN}Old config removed${NC}"
         else
-            echo -e "${GREEN}tmux already configured for agent-deck (v$INSTALLED_VERSION)${NC}"
+            echo -e "${GREEN}tmux already configured for agent-desk (v$INSTALLED_VERSION)${NC}"
             return 0
         fi
     fi
 
     echo ""
     echo -e "${BLUE}tmux Configuration${NC}"
-    echo "Agent Deck works best with mouse scroll and clipboard support."
+    echo "Agent Desk works best with mouse scroll and clipboard support."
     echo ""
 
     if [[ -f "$TMUX_CONF" ]] && [[ "$NEEDS_UPDATE" != "true" ]]; then
@@ -384,11 +384,11 @@ configure_tmux() {
 
     # Skip prompt if we're updating (user already confirmed)
     if [[ "$NEEDS_UPDATE" != "true" ]]; then
-        read -p "Configure tmux for agent-deck? [Y/n] " -n 1 -r
+        read -p "Configure tmux for agent-desk? [Y/n] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Nn]$ ]]; then
             echo "Skipping tmux configuration."
-            echo "You can manually add the config later (see: agent-deck docs)"
+            echo "You can manually add the config later (see: agent-desk docs)"
             return 0
         fi
     fi
@@ -421,8 +421,8 @@ configure_tmux() {
     local CONFIG_BLOCK="
 $MARKER
 $VERSION_MARKER $CURRENT_VERSION
-# Added by agent-deck installer - $(date +%Y-%m-%d)
-# https://github.com/asheshgoplani/agent-deck
+# Added by agent-desk installer - $(date +%Y-%m-%d)
+# https://github.com/millwright-software/agent-desk
 
 # Terminal with true color support
 set -g default-terminal \"tmux-256color\"
@@ -449,7 +449,7 @@ bind-key -T copy-mode WheelDownPane send-keys -X scroll-down
 # Clipboard integration (drag-to-copy)
 bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel \"$CLIPBOARD_CMD\"
 bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel \"$CLIPBOARD_CMD\"
-# End agent-deck configuration
+# End agent-desk configuration
 "
 
     # Append to config file
@@ -502,7 +502,7 @@ if "$INSTALL_DIR/$BINARY_NAME" version &> /dev/null; then
     echo ""
 
     # Show tmux config status
-    if [[ -f "$HOME/.tmux.conf" ]] && grep -q "# agent-deck configuration" "$HOME/.tmux.conf" 2>/dev/null; then
+    if [[ -f "$HOME/.tmux.conf" ]] && grep -q "# agent-desk configuration" "$HOME/.tmux.conf" 2>/dev/null; then
         echo -e "tmux config: ${GREEN}Configured for mouse scroll + clipboard${NC}"
     else
         echo -e "tmux config: ${YELLOW}Not configured (run installer again or see docs)${NC}"

@@ -13,7 +13,7 @@ func createTestRepo(t *testing.T, dir string) {
 	t.Helper()
 
 	// Initialize git repo
-	cmd := exec.Command("git", "init")
+	cmd := exec.Command("git", "-c", "init.defaultBranch=main", "init")
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
@@ -59,6 +59,17 @@ func createBranch(t *testing.T, dir, branchName string) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to create branch %s: %v", branchName, err)
 	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestIsGitRepo(t *testing.T) {
@@ -491,6 +502,45 @@ func TestCreateWorktree(t *testing.T) {
 		}
 	})
 
+	t.Run("creates worktree from default remote branch", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		remoteDir := filepath.Join(t.TempDir(), "origin.git")
+		if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+			t.Fatalf("failed to create remote dir: %v", err)
+		}
+		runGit(t, remoteDir, "init", "--bare")
+		runGit(t, dir, "remote", "add", "origin", remoteDir)
+		runGit(t, dir, "push", "-u", "origin", "main")
+		runGit(t, dir, "checkout", "-b", "remote-only")
+		runGit(t, dir, "push", "-u", "origin", "remote-only")
+		runGit(t, dir, "checkout", "main")
+		runGit(t, dir, "branch", "-D", "remote-only")
+
+		worktreePath := filepath.Join(t.TempDir(), "worktree")
+		if err := CreateWorktree(dir, worktreePath, "remote-only"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !BranchExists(dir, "remote-only") {
+			t.Fatal("expected CreateWorktree to create a local tracking branch")
+		}
+
+		branch, err := GetCurrentBranch(worktreePath)
+		if err != nil {
+			t.Fatalf("failed to get branch: %v", err)
+		}
+		if branch != "remote-only" {
+			t.Fatalf("expected remote-only branch, got %s", branch)
+		}
+
+		upstream := runGit(t, worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+		if upstream != "origin/remote-only" {
+			t.Fatalf("expected upstream origin/remote-only, got %s", upstream)
+		}
+	})
+
 	t.Run("returns error for invalid branch name", func(t *testing.T) {
 		dir := t.TempDir()
 		createTestRepo(t, dir)
@@ -512,6 +562,75 @@ func TestCreateWorktree(t *testing.T) {
 			t.Error("expected error for non-git directory")
 		}
 	})
+}
+
+func TestResolveWorktreeBranch(t *testing.T) {
+	t.Run("prefers local branch over default remote branch", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		remoteDir := filepath.Join(t.TempDir(), "origin.git")
+		if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+			t.Fatalf("failed to create remote dir: %v", err)
+		}
+		runGit(t, remoteDir, "init", "--bare")
+		runGit(t, dir, "remote", "add", "origin", remoteDir)
+		runGit(t, dir, "push", "-u", "origin", "main")
+		runGit(t, dir, "checkout", "-b", "shared-branch")
+		runGit(t, dir, "push", "-u", "origin", "shared-branch")
+		runGit(t, dir, "checkout", "main")
+
+		resolution, err := resolveWorktreeBranch(dir, "shared-branch")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolution.Mode != worktreeBranchLocal {
+			t.Fatalf("expected local branch resolution, got mode %d", resolution.Mode)
+		}
+		if resolution.Remote != "" {
+			t.Fatalf("expected no remote for local resolution, got %q", resolution.Remote)
+		}
+	})
+}
+
+func TestListBranchCandidates(t *testing.T) {
+	dir := t.TempDir()
+	createTestRepo(t, dir)
+
+	remoteDir := filepath.Join(t.TempDir(), "origin.git")
+	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+		t.Fatalf("failed to create remote dir: %v", err)
+	}
+	runGit(t, remoteDir, "init", "--bare")
+	runGit(t, dir, "remote", "add", "origin", remoteDir)
+	runGit(t, dir, "push", "-u", "origin", "main")
+	runGit(t, dir, "checkout", "-b", "feature/local-only")
+	runGit(t, dir, "checkout", "main")
+	runGit(t, dir, "checkout", "-b", "feature/remote-only")
+	runGit(t, dir, "push", "-u", "origin", "feature/remote-only")
+	runGit(t, dir, "checkout", "main")
+	runGit(t, dir, "branch", "-D", "feature/remote-only")
+
+	branches, err := ListBranchCandidates(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !containsString(branches, "feature/local-only") {
+		t.Fatalf("expected local branch in candidates: %v", branches)
+	}
+	if !containsString(branches, "feature/remote-only") {
+		t.Fatalf("expected remote-only branch in candidates: %v", branches)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestListWorktrees(t *testing.T) {
@@ -945,4 +1064,213 @@ func TestPruneWorktrees(t *testing.T) {
 			t.Errorf("expected 1 worktree after prune, got %d", len(worktrees))
 		}
 	})
+}
+
+func TestIsWorktree(t *testing.T) {
+	t.Run("returns false for main repo", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		if IsWorktree(dir) {
+			t.Error("expected IsWorktree to return false for main repo")
+		}
+	})
+
+	t.Run("returns true for worktree", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		worktreePath := filepath.Join(t.TempDir(), "wt")
+		if err := CreateWorktree(dir, worktreePath, "feature-wt"); err != nil {
+			t.Fatalf("failed to create worktree: %v", err)
+		}
+
+		if !IsWorktree(worktreePath) {
+			t.Error("expected IsWorktree to return true for worktree")
+		}
+	})
+
+	t.Run("returns false for non-git directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if IsWorktree(dir) {
+			t.Error("expected IsWorktree to return false for non-git directory")
+		}
+	})
+}
+
+func TestGetMainWorktreePath(t *testing.T) {
+	t.Run("returns main repo from worktree", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		worktreePath := filepath.Join(t.TempDir(), "wt")
+		if err := CreateWorktree(dir, worktreePath, "feature-main"); err != nil {
+			t.Fatalf("failed to create worktree: %v", err)
+		}
+
+		mainPath, err := GetMainWorktreePath(worktreePath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedMain, _ := filepath.EvalSymlinks(dir)
+		actualMain, _ := filepath.EvalSymlinks(mainPath)
+
+		if actualMain != expectedMain {
+			t.Errorf("expected main worktree path %s, got %s", expectedMain, actualMain)
+		}
+	})
+
+	t.Run("returns repo root from main repo", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		mainPath, err := GetMainWorktreePath(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedRoot, _ := filepath.EvalSymlinks(dir)
+		actualRoot, _ := filepath.EvalSymlinks(mainPath)
+
+		if actualRoot != expectedRoot {
+			t.Errorf("expected %s, got %s", expectedRoot, actualRoot)
+		}
+	})
+}
+
+func TestGetWorktreeBaseRoot(t *testing.T) {
+	t.Run("returns repo root for main repo", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		root, err := GetWorktreeBaseRoot(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedRoot, _ := filepath.EvalSymlinks(dir)
+		actualRoot, _ := filepath.EvalSymlinks(root)
+
+		if actualRoot != expectedRoot {
+			t.Errorf("expected %s, got %s", expectedRoot, actualRoot)
+		}
+	})
+
+	t.Run("returns main repo root from worktree", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		worktreePath := filepath.Join(t.TempDir(), "wt")
+		if err := CreateWorktree(dir, worktreePath, "feature-base"); err != nil {
+			t.Fatalf("failed to create worktree: %v", err)
+		}
+
+		root, err := GetWorktreeBaseRoot(worktreePath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedRoot, _ := filepath.EvalSymlinks(dir)
+		actualRoot, _ := filepath.EvalSymlinks(root)
+
+		if actualRoot != expectedRoot {
+			t.Errorf("expected main repo root %s, got %s", expectedRoot, actualRoot)
+		}
+	})
+
+	t.Run("returns main repo root from worktree subdirectory", func(t *testing.T) {
+		dir := t.TempDir()
+		createTestRepo(t, dir)
+
+		worktreePath := filepath.Join(t.TempDir(), "wt")
+		if err := CreateWorktree(dir, worktreePath, "feature-sub"); err != nil {
+			t.Fatalf("failed to create worktree: %v", err)
+		}
+
+		subDir := filepath.Join(worktreePath, "deep", "nested")
+		if err := os.MkdirAll(subDir, 0755); err != nil {
+			t.Fatalf("failed to create subdir: %v", err)
+		}
+
+		root, err := GetWorktreeBaseRoot(subDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedRoot, _ := filepath.EvalSymlinks(dir)
+		actualRoot, _ := filepath.EvalSymlinks(root)
+
+		if actualRoot != expectedRoot {
+			t.Errorf("expected main repo root %s, got %s", expectedRoot, actualRoot)
+		}
+	})
+
+	t.Run("returns error for non-git directory", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := GetWorktreeBaseRoot(dir)
+		if err == nil {
+			t.Error("expected error for non-git directory")
+		}
+	})
+}
+
+func TestIntegration_WorktreeNesting(t *testing.T) {
+	// This test verifies the fix for the worktree-within-worktree nesting bug.
+	// When creating a worktree from within another worktree, the new worktree
+	// should be a sibling (relative to the main repo), not nested inside the first.
+	dir := t.TempDir()
+	createTestRepo(t, dir)
+
+	// Create first worktree (simulates Session A)
+	wt1Path := filepath.Join(dir, ".worktrees", "feature-a")
+	if err := CreateWorktree(dir, wt1Path, "feature-a"); err != nil {
+		t.Fatalf("failed to create first worktree: %v", err)
+	}
+
+	// From inside wt1, resolve the base root (this is what the fix does)
+	baseRoot, err := GetWorktreeBaseRoot(wt1Path)
+	if err != nil {
+		t.Fatalf("failed to get base root from worktree: %v", err)
+	}
+
+	expectedRoot, _ := filepath.EvalSymlinks(dir)
+	actualRoot, _ := filepath.EvalSymlinks(baseRoot)
+
+	if actualRoot != expectedRoot {
+		t.Fatalf("GetWorktreeBaseRoot returned %s, expected %s", actualRoot, expectedRoot)
+	}
+
+	// Create second worktree using the resolved base root (simulates Session B fork)
+	wt2Path := GenerateWorktreePath(baseRoot, "feature-b", "subdirectory")
+	if err := CreateWorktree(baseRoot, wt2Path, "feature-b"); err != nil {
+		t.Fatalf("failed to create second worktree: %v", err)
+	}
+
+	// Verify: wt2 should be under <main-repo>/.worktrees/, NOT under wt1
+	expectedWt2, _ := filepath.EvalSymlinks(filepath.Join(dir, ".worktrees", "feature-b"))
+	actualWt2, _ := filepath.EvalSymlinks(wt2Path)
+
+	if actualWt2 != expectedWt2 {
+		t.Errorf("second worktree nested incorrectly!\nexpected: %s\ngot:      %s", expectedWt2, actualWt2)
+	}
+
+	// Also verify that GetRepoRoot (the OLD behavior) would have caused nesting
+	wrongRoot, err := GetRepoRoot(wt1Path)
+	if err != nil {
+		t.Fatalf("GetRepoRoot failed: %v", err)
+	}
+	wrongRoot, _ = filepath.EvalSymlinks(wrongRoot)
+	resolvedWt1, _ := filepath.EvalSymlinks(wt1Path)
+	if wrongRoot != resolvedWt1 {
+		t.Logf("Note: GetRepoRoot returned %s (expected worktree root %s)", wrongRoot, resolvedWt1)
+	}
+
+	// The wrong path would be: wt1/.worktrees/feature-b (nested!)
+	wrongWt2 := GenerateWorktreePath(wrongRoot, "feature-b", "subdirectory")
+	if wrongWt2 == actualWt2 {
+		t.Error("GetRepoRoot should have produced a DIFFERENT (nested) path than GetWorktreeBaseRoot")
+	}
+	t.Logf("Correct path:  %s", actualWt2)
+	t.Logf("Wrong path:    %s (would have been nested)", wrongWt2)
 }

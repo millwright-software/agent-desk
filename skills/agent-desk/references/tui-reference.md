@@ -1,0 +1,186 @@
+# TUI Reference
+
+Complete reference for agent-desk Terminal UI features.
+
+## Keyboard Shortcuts
+
+### Navigation
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `h` / `←` | Collapse group / go to parent |
+| `l` / `→` / `Tab` | Toggle expand/collapse group |
+| `1-9` | Jump to Nth root group |
+
+### Session Actions
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Attach to session OR toggle group |
+| `n` | New session (inherits current group) |
+| `r` | Rename session or group |
+| `R` | Restart session (reloads MCPs) |
+| `K` / `J` | Move item up/down in order |
+| `m` | Move session to different group |
+| `M` | Open MCP Manager (Claude/Gemini) |
+| `d` | Delete session or group |
+| `u` | Mark unread (idle -> waiting) |
+| `f` | Quick fork (Claude only) |
+| `F` | Fork with options (Claude only) |
+
+### Group Actions
+
+| Key | Action |
+|-----|--------|
+| `g` | Create group (subgroup if on group) |
+| `e` | Rename group (alias for `r`) |
+
+### Search & Filter
+
+| Key | Action |
+|-----|--------|
+| `/` | Local search (fuzzy) |
+| `G` | Global search (all Claude conversations) |
+| `Tab` | Switch between local/global search |
+| `0` | Clear filter (show all) |
+| `!` | Filter: running only (toggle) |
+| `@` | Filter: waiting only (toggle) |
+| `#` | Filter: idle only (toggle) |
+| `$` | Filter: error only (toggle) |
+
+### Global
+
+| Key | Action |
+|-----|--------|
+| `?` | Help overlay |
+| `i` | Import existing tmux sessions |
+| `Ctrl+R` | Manual refresh |
+| `Ctrl+Q` | Detach (keep tmux running) |
+| `q` / `Ctrl+C` | Quit |
+
+## Status Indicators
+
+| Symbol | Status | Color | Meaning |
+|--------|--------|-------|---------|
+| `●` | Running | Green | Active, content changed in last 2s |
+| `◐` | Waiting | Yellow | Stopped, unacknowledged |
+| `○` | Idle | Gray | Stopped, acknowledged |
+| `✕` | Error | Red | tmux session doesn't exist |
+| `⟳` | Starting | Yellow | Session launching |
+
+## Dialogs
+
+### New Session (`n`)
+
+**Fields:**
+- Session name (required)
+- Project path (required, supports `~/`)
+- Command (claude/gemini/opencode/codex/custom)
+- Parent group (auto-selected)
+
+**Controls:** `Tab` move fields | `Enter` create | `Esc` cancel
+
+### MCP Manager (`M`)
+
+**Layout:**
+- Two columns: Attached | Available
+- Two scopes: LOCAL | GLOBAL
+
+**Controls:**
+- `Tab` - Switch scope
+- `←/→` - Switch columns
+- `↑/↓` - Navigate
+- `Space` - Toggle MCP
+- `Enter` - Apply changes
+- `Esc` - Cancel
+
+**Indicators:**
+- `(l)` LOCAL scope
+- `(g)` GLOBAL scope
+- `(p)` PROJECT scope
+- `🔌` MCP is pooled
+- `⟳` Pending restart
+
+### Fork Dialog (`F`)
+
+**Fields:**
+- Session title (pre-filled)
+- Group (auto-selected)
+
+**Controls:** `Enter` fork | `Esc` cancel
+
+### Delete Confirmation (`d`)
+
+**For sessions:** Warning about tmux kill, process termination
+
+**For groups:** Sessions move to default (not deleted)
+
+**Controls:** `y` confirm | `n`/`Esc` cancel
+
+## Search
+
+### Local Search (`/`)
+
+- Fuzzy search session titles and groups
+- Max 10 results
+- `↑/↓` or `Ctrl+K/J` navigate
+- `Enter` select | `Tab` switch to global | `Esc` close
+
+### Global Search (`G`)
+
+- Full content search across `~/.claude/projects/`
+- Regex + fuzzy matching
+- Recency ranking
+- Split view: results + preview
+- `[/]` scroll preview
+- `Enter` create/jump to session
+
+**Config:**
+```toml
+[global_search]
+enabled = true
+recent_days = 30
+```
+
+## Preview Pane
+
+- Shows last ~500 lines of session's tmux pane
+- Auto-updates every 2 seconds
+- Launch animation: 6-15s for Claude/Gemini
+
+## Layout
+
+- **< 50 cols:** List only
+- **50-79 cols:** Stacked (list above preview)
+- **80+ cols:** Side-by-side (default)
+
+## Tool Icons
+
+| Tool | Icon | Color |
+|------|------|-------|
+| Claude | 🤖 | Orange |
+| Gemini | ✨ | Purple |
+| OpenCode | 🌐 | Cyan |
+| Codex | 💻 | Cyan |
+| Cursor | 📝 | Blue |
+| Shell | 🐚 | Default |
+
+## Color Scheme (Tokyo Night)
+
+| Element | Color |
+|---------|-------|
+| Accent (selection) | #7aa2f7 |
+| Running | #9ece6a |
+| Waiting | #e0af68 |
+| Error | #f7768e |
+| Groups | #7dcfff |
+| Background | #1a1b26 |
+| Surface | #24283b |
+
+## Hidden Features
+
+- **`Ctrl+K/J`:** Vim-style navigation in search
+- **Numbers 1-9:** Jump to root groups instantly
+- **Status filters are toggles:** Press again to turn off

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
-	"github.com/asheshgoplani/agent-deck/internal/tmux"
+	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/statedb"
+	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
 var storageLog = logging.ForComponent(logging.CompStorage)
@@ -94,8 +94,17 @@ type InstanceData struct {
 	CodexSessionID  string    `json:"codex_session_id,omitempty"`
 	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
 
-	// Latest user input for context
-	LatestPrompt string `json:"latest_prompt,omitempty"`
+	// Per-session color scheme (preset name; empty = Default)
+	ColorScheme string `json:"color_scheme,omitempty"`
+
+	// Flag is the manual u-key marker (none/unread/parked); purely visual
+	Flag SessionFlag `json:"flag,omitempty"`
+
+	// LastLogActivityAt is the persisted transcript-mtime staleness signal
+	LastLogActivityAt time.Time `json:"last_log_activity_at,omitempty"`
+
+	// ClaudeModel is the model ID last seen in the session JSONL
+	ClaudeModel string `json:"claude_model,omitempty"`
 
 	// Tool-specific launch options (generic for all tools: claude, codex, etc.)
 	ToolOptionsJSON json.RawMessage `json:"tool_options,omitempty"`
@@ -245,14 +254,22 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			tmuxName = inst.tmuxSession.Name
 		}
 
+		// Persist the transcript-activity mtime so the "last interacted"
+		// staleness time survives reloads/restarts (it's otherwise refreshed
+		// only round-robin, so a reload would blank it for all sessions).
+		var lastLogActivity int64
+		if !inst.lastLogActivityAt.IsZero() {
+			lastLogActivity = inst.lastLogActivityAt.Unix()
+		}
+
 		toolData := statedb.MarshalToolData(
-			inst.ClaudeSessionID, inst.ClaudeDetectedAt,
+			inst.ClaudeSessionID, inst.ClaudeDetectedAt, inst.ClaudeModel,
 			inst.GeminiSessionID, inst.GeminiDetectedAt,
 			inst.GeminiYoloMode, inst.GeminiModel,
 			inst.OpenCodeSessionID, inst.OpenCodeDetectedAt,
 			inst.CodexSessionID, inst.CodexDetectedAt,
-			inst.LatestPrompt, inst.LoadedMCPNames,
-			inst.ToolOptionsJSON,
+			inst.LoadedMCPNames,
+			inst.ToolOptionsJSON, inst.ColorScheme, int(inst.Flag), lastLogActivity,
 		)
 
 		rows[i] = &statedb.InstanceRow{
@@ -360,6 +377,15 @@ func (s *Storage) Load() ([]*Instance, error) {
 	return instances, err
 }
 
+// unixToTime converts a persisted unix-seconds timestamp back to a time.Time,
+// returning the zero time for a zero/negative value (unset).
+func unixToTime(sec int64) time.Time {
+	if sec <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
+}
+
 // LoadLite reads session data from SQLite without tmux reconnection.
 // This is a fast path for operations that only need to read session metadata
 // (e.g., finding current session by tmux name) without initializing full Instance objects.
@@ -386,13 +412,13 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 	// Convert to InstanceData format (for backward compat with CLI commands)
 	instances := make([]*InstanceData, len(dbRows))
 	for i, r := range dbRows {
-		claudeSID, claudeAt,
+		claudeSID, claudeAt, claudeModel,
 			geminiSID, geminiAt,
 			geminiYolo, geminiModel,
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
-			latestPrompt, loadedMCPs,
-			toolOpts := statedb.UnmarshalToolData(r.ToolData)
+			loadedMCPs,
+			toolOpts, colorScheme, flag, lastLogUnix := statedb.UnmarshalToolData(r.ToolData)
 
 		instances[i] = &InstanceData{
 			ID:                 r.ID,
@@ -413,6 +439,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			WorktreeBranch:     r.WorktreeBranch,
 			ClaudeSessionID:    claudeSID,
 			ClaudeDetectedAt:   claudeAt,
+			ClaudeModel:        claudeModel,
 			GeminiSessionID:    geminiSID,
 			GeminiDetectedAt:   geminiAt,
 			GeminiYoloMode:     geminiYolo,
@@ -421,9 +448,11 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			OpenCodeDetectedAt: opencodeAt,
 			CodexSessionID:     codexSID,
 			CodexDetectedAt:    codexAt,
-			LatestPrompt:       latestPrompt,
 			ToolOptionsJSON:    toolOpts,
 			LoadedMCPNames:     loadedMCPs,
+			ColorScheme:        colorScheme,
+			Flag:               SessionFlag(flag),
+			LastLogActivityAt:  unixToTime(lastLogUnix),
 		}
 	}
 
@@ -468,13 +497,13 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 		Instances: make([]*InstanceData, len(dbRows)),
 	}
 	for i, r := range dbRows {
-		claudeSID, claudeAt,
+		claudeSID, claudeAt, claudeModel,
 			geminiSID, geminiAt,
 			geminiYolo, geminiModel,
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
-			latestPrompt, loadedMCPs,
-			toolOpts := statedb.UnmarshalToolData(r.ToolData)
+			loadedMCPs,
+			toolOpts, colorScheme, flag, lastLogUnix := statedb.UnmarshalToolData(r.ToolData)
 
 		data.Instances[i] = &InstanceData{
 			ID:                 r.ID,
@@ -495,6 +524,7 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			WorktreeBranch:     r.WorktreeBranch,
 			ClaudeSessionID:    claudeSID,
 			ClaudeDetectedAt:   claudeAt,
+			ClaudeModel:        claudeModel,
 			GeminiSessionID:    geminiSID,
 			GeminiDetectedAt:   geminiAt,
 			GeminiYoloMode:     geminiYolo,
@@ -503,9 +533,11 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			OpenCodeDetectedAt: opencodeAt,
 			CodexSessionID:     codexSID,
 			CodexDetectedAt:    codexAt,
-			LatestPrompt:       latestPrompt,
 			ToolOptionsJSON:    toolOpts,
 			LoadedMCPNames:     loadedMCPs,
+			ColorScheme:        colorScheme,
+			Flag:               SessionFlag(flag),
+			LastLogActivityAt:  unixToTime(lastLogUnix),
 		}
 	}
 
@@ -650,6 +682,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			WorktreeBranch:     instData.WorktreeBranch,
 			ClaudeSessionID:    instData.ClaudeSessionID,
 			ClaudeDetectedAt:   instData.ClaudeDetectedAt,
+			ClaudeModel:        instData.ClaudeModel,
 			GeminiSessionID:    instData.GeminiSessionID,
 			GeminiDetectedAt:   instData.GeminiDetectedAt,
 			GeminiYoloMode:     instData.GeminiYoloMode,
@@ -659,10 +692,16 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			CodexSessionID:     instData.CodexSessionID,
 			CodexDetectedAt:    instData.CodexDetectedAt,
 			ToolOptionsJSON:    instData.ToolOptionsJSON,
-			LatestPrompt:       instData.LatestPrompt,
 			LoadedMCPNames:     instData.LoadedMCPNames,
+			ColorScheme:        instData.ColorScheme,
+			Flag:               instData.Flag,
+			lastLogActivityAt:  instData.LastLogActivityAt,
 			tmuxSession:        tmuxSess,
 		}
+
+		// Apply the persisted color scheme to the tmux session styling so a
+		// reloaded session keeps its colors when next started/attached.
+		applyColorSchemeToTmux(tmuxSess, instData.ColorScheme)
 
 		// PERFORMANCE: Skip UpdateStatus at load time - use cached status from SQLite
 		// The background worker will update status on first tick.

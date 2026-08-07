@@ -1,7 +1,9 @@
 package ui
 
 import (
-	"github.com/asheshgoplani/agent-deck/internal/session"
+	"strings"
+
+	"github.com/millwright-software/agent-desk/internal/session"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -111,6 +113,35 @@ func (p *ClaudeOptionsPanel) GetOptions() *session.ClaudeOptions {
 	}
 
 	return opts
+}
+
+// SummaryView returns a compact one-line summary of current options.
+func (p *ClaudeOptionsPanel) SummaryView() string {
+	var parts []string
+
+	if !p.isForkMode {
+		switch p.sessionMode {
+		case 1:
+			parts = append(parts, "continue")
+		case 2:
+			parts = append(parts, "resume")
+		}
+	}
+
+	if p.skipPermissions {
+		parts = append(parts, "skip-perms")
+	}
+	if p.useChrome {
+		parts = append(parts, "chrome")
+	}
+	if p.useTeammateMode {
+		parts = append(parts, "teammate")
+	}
+
+	if len(parts) == 0 {
+		return "defaults"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Update handles key events

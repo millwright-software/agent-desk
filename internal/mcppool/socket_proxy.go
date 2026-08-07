@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 )
 
 var proxyLog = logging.ForComponent(logging.CompPool)
@@ -101,9 +101,9 @@ func isSocketAlive(socketPath string) bool {
 
 func NewSocketProxy(ctx context.Context, name, command string, args []string, env map[string]string) (*SocketProxy, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("agentdeck-mcp-%s.sock", name))
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("agentdesk-mcp-%s.sock", name))
 
-	// Check if socket already exists and is alive (another agent-deck instance owns it)
+	// Check if socket already exists and is alive (another agent-desk instance owns it)
 	if isSocketAlive(socketPath) {
 		proxyLog.Info("socket_reuse_external", slog.String("mcp", name))
 		// Return a proxy that just points to the existing socket (no process to manage)
@@ -145,7 +145,7 @@ func (p *SocketProxy) Start() error {
 		return nil
 	}
 
-	logDir := filepath.Join(os.Getenv("HOME"), ".agent-deck", "logs", "mcppool")
+	logDir := filepath.Join(os.Getenv("HOME"), ".agent-desk", "logs", "mcppool")
 	_ = os.MkdirAll(logDir, 0755)
 	p.logFile = filepath.Join(logDir, fmt.Sprintf("%s_socket.log", p.name))
 

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 )
 
 var patternLog = logging.ForComponent(logging.CompStatus)
@@ -61,6 +61,29 @@ func DefaultRawPatterns(toolName string) *RawPatterns {
 	case "codex":
 		return &RawPatterns{
 			PromptPatterns: []string{"How can I help"},
+		}
+	case "copilot":
+		// GitHub Copilot CLI (the standalone `copilot` binary). Patterns adapted
+		// from upstream agent-deck, which derived them from real Copilot CLI TUI
+		// transcripts (Issue #556). Overridable via [tools.copilot] in config.toml.
+		return &RawPatterns{
+			BusyPatterns: []string{
+				"esc to interrupt",
+				"ctrl+c to interrupt",
+				"thinking",
+				"Thinking",
+				"Generating",
+				"Reading",
+				"Searching",
+				"Running",
+				`re:(?m)^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s`,
+			},
+			PromptPatterns: []string{
+				"How can I help",
+				`re:(?m)^\s*copilot>\s*`,
+				`re:(?m)^\s*›\s`,
+				`re:(?m)^\s*>\s*$`,
+			},
 		}
 	case "shell":
 		return &RawPatterns{

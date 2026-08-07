@@ -391,7 +391,7 @@ func (d *WorktreeFinishDialog) viewConfirm(titleStyle, labelStyle, errStyle, foo
 		b.WriteString(actionStyle.Render(fmt.Sprintf("  • Delete branch %s", d.branchName)))
 		b.WriteString("\n")
 	}
-	b.WriteString(actionStyle.Render("  • Remove session from agent-deck"))
+	b.WriteString(actionStyle.Render("  • Remove session from agent-desk"))
 	b.WriteString("\n")
 
 	// Dirty warning
