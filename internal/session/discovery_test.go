@@ -18,7 +18,7 @@ func TestDiscoverExistingTmuxSessions(t *testing.T) {
 	_ = discovered
 }
 
-func TestDiscoverSkipsAgentDeckSessions(t *testing.T) {
+func TestDiscoverSkipsAgentDeskSessions(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
 	}
@@ -93,6 +93,7 @@ func TestDetectToolFromName(t *testing.T) {
 		{"Gemini mixed case", "Gemini-AI", "gemini"},
 		{"OpenCode", "opencode-session", "opencode"},
 		{"Codex", "codex-test", "codex"},
+		{"Copilot", "copilot-session", "copilot"},
 		{"Unknown", "random-session", "shell"},
 	}
 

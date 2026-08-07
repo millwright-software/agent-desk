@@ -24,7 +24,7 @@ func TestOpenCodeDetectionE2E(t *testing.T) {
 
 	t.Log("=== E2E OpenCode Detection Test ===")
 
-	// Create instance like agent-deck does
+	// Create instance like agent-desk does
 	inst := &Instance{
 		Tool:        "opencode",
 		ProjectPath: projectPath,

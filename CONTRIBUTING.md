@@ -1,18 +1,18 @@
-# Contributing to Agent Deck
+# Contributing to Agent Desk
 
-Thank you for your interest in contributing to Agent Deck! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to Agent Desk! This document provides guidelines and information for contributors.
 
 ## Getting Started
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/agent-deck.git
-   cd agent-deck
+   git clone https://github.com/YOUR_USERNAME/agent-desk.git
+   cd agent-desk
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/asheshgoplani/agent-deck.git
+   git remote add upstream https://github.com/millwright-software/agent-desk.git
    ```
 
 ## Development Setup
@@ -26,7 +26,7 @@ Thank you for your interest in contributing to Agent Deck! This document provide
 ### Building
 
 ```bash
-make build      # Build binary to ./build/agent-deck
+make build      # Build binary to ./build/agent-desk
 make test       # Run tests
 make lint       # Run linter (requires golangci-lint)
 make fmt        # Format code
@@ -102,7 +102,7 @@ refactor: simplify group management logic
 ### Bug Reports
 
 Include:
-- Agent Deck version (`agent-deck version`)
+- Agent Desk version (`agent-desk version`)
 - Operating system and version
 - tmux version (`tmux -V`)
 - Steps to reproduce
@@ -118,8 +118,8 @@ Include:
 ## Project Structure
 
 ```
-agent-deck/
-├── cmd/agent-deck/     # CLI entry point
+agent-desk/
+├── cmd/agent-desk/     # CLI entry point
 ├── internal/
 │   ├── ui/             # TUI components (Bubble Tea)
 │   ├── session/        # Session & group management
@@ -139,13 +139,13 @@ agent-deck/
 
 Enable debug logging:
 ```bash
-AGENTDECK_DEBUG=1 agent-deck
+AGENTDESK_DEBUG=1 agent-desk
 ```
 
 ## Questions?
 
-- **Chat:** Join the [Agent Deck Discord](https://discord.gg/e4xSs6NBN8) for questions, workflow discussions, and community support
-- **Issues:** [Open an issue](https://github.com/asheshgoplani/agent-deck/issues) for bugs or feature requests
+- **Issues:** [Open an issue](https://github.com/millwright-software/agent-desk/issues) for bugs or feature requests
+- **Discussions:** [Start a discussion](https://github.com/millwright-software/agent-desk/discussions) for questions and workflow ideas
 
 ## License
 

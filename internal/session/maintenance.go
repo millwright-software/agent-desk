@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 )
 
 var maintLog = logging.ForComponent(logging.CompSession)
@@ -27,7 +27,7 @@ type MaintenanceResult struct {
 func RunMaintenance() MaintenanceResult {
 	start := time.Now()
 
-	deckDir, err := GetAgentDeckDir()
+	deckDir, err := GetAgentDeskDir()
 	if err != nil {
 		maintLog.Warn("maintenance_dir_lookup_failed", slog.String("error", err.Error()))
 		return MaintenanceResult{Duration: time.Since(start)}

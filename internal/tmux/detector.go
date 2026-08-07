@@ -80,7 +80,7 @@ func (d *PromptDetector) HasPrompt(content string) bool {
 // - WAITING (normal mode): Shows permission dialogs with Yes/No options
 // - WAITING (--dangerously-skip-permissions): Shows just ">" prompt
 // - THINKING: Extended reasoning mode with "think"/"think harder" keywords
-// - AUTO-ACCEPT: Toggled via Shift+Tab, auto-applies edits
+// - AUTO-ACCEPT: Toggled via Shift+Tab (Claude Code's own binding), auto-applies edits
 //
 // References:
 // - Claude Squad: github.com/smtg-ai/claude-squad

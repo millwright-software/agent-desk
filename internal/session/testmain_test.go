@@ -22,8 +22,8 @@ func skipIfNoTmuxServer(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	// Force test profile to prevent production data corruption
-	// See CLAUDE.md: "2025-12-11 Incident: Tests with AGENTDECK_PROFILE=work overwrote ALL 36 production sessions"
-	os.Setenv("AGENTDECK_PROFILE", "_test")
+	// See CLAUDE.md: "2025-12-11 Incident: Tests with AGENTDESK_PROFILE=work overwrote ALL 36 production sessions"
+	os.Setenv("AGENTDESK_PROFILE", "_test")
 
 	// Run tests
 	code := m.Run()
@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 
 // cleanupTestSessions kills any tmux sessions created during testing.
 // IMPORTANT: Only match specific known test artifacts, NOT broad patterns.
-// Broad patterns like HasPrefix("agentdeck_test") or Contains("test_") kill
+// Broad patterns like HasPrefix("agentdesk_test") or Contains("test_") kill
 // real user sessions with "test" in their title. Each test already has
 // defer Kill() which handles cleanup reliably (runs on panic, Fatal, etc).
 func cleanupTestSessions() {

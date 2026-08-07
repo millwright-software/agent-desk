@@ -604,3 +604,53 @@ func TestGlobalSingleton(t *testing.T) {
 		t.Error("Expected nil after clearing")
 	}
 }
+
+// TestSaveInstancesUpsertOnly guards the concurrency data-loss fix: a save from
+// a stale snapshot must upsert its own rows without deleting rows it doesn't
+// know about, and an empty save must never wipe the table.
+func TestSaveInstancesUpsertOnly(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now()
+
+	full := []*InstanceRow{
+		{ID: "a", Title: "Alpha", ProjectPath: "/a", Tool: "claude", Status: "idle", CreatedAt: now, ToolData: json.RawMessage("{}")},
+		{ID: "b", Title: "Beta", ProjectPath: "/b", Tool: "claude", Status: "idle", CreatedAt: now, ToolData: json.RawMessage("{}")},
+	}
+	if err := db.SaveInstances(full); err != nil {
+		t.Fatalf("save full: %v", err)
+	}
+
+	// A concurrent process with a stale snapshot saves only "a". "b" must survive.
+	stale := []*InstanceRow{
+		{ID: "a", Title: "Alpha edited", ProjectPath: "/a", Tool: "claude", Status: "idle", CreatedAt: now, ToolData: json.RawMessage("{}")},
+	}
+	if err := db.SaveInstances(stale); err != nil {
+		t.Fatalf("save stale: %v", err)
+	}
+
+	loaded, err := db.LoadInstances()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("upsert-only: expected 2 rows after stale save, got %d (b was swept)", len(loaded))
+	}
+	byID := map[string]string{}
+	for _, r := range loaded {
+		byID[r.ID] = r.Title
+	}
+	if byID["a"] != "Alpha edited" {
+		t.Errorf("a should be updated, got %q", byID["a"])
+	}
+	if byID["b"] != "Beta" {
+		t.Errorf("b should survive untouched, got %q", byID["b"])
+	}
+
+	// Empty save must not wipe the table.
+	if err := db.SaveInstances(nil); err != nil {
+		t.Fatalf("empty save: %v", err)
+	}
+	if loaded, _ = db.LoadInstances(); len(loaded) != 2 {
+		t.Errorf("empty save wiped the table: %d rows remain", len(loaded))
+	}
+}

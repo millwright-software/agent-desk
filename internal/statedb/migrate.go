@@ -48,7 +48,6 @@ type jsonInstanceData struct {
 	CodexSessionID  string    `json:"codex_session_id,omitempty"`
 	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
 
-	LatestPrompt    string          `json:"latest_prompt,omitempty"`
 	ToolOptionsJSON json.RawMessage `json:"tool_options,omitempty"`
 	LoadedMCPNames  []string        `json:"loaded_mcp_names,omitempty"`
 }
@@ -66,6 +65,7 @@ type jsonGroupData struct {
 type toolDataBlob struct {
 	ClaudeSessionID    string          `json:"claude_session_id,omitempty"`
 	ClaudeDetectedAt   int64           `json:"claude_detected_at,omitempty"`
+	ClaudeModel        string          `json:"claude_model,omitempty"`
 	GeminiSessionID    string          `json:"gemini_session_id,omitempty"`
 	GeminiDetectedAt   int64           `json:"gemini_detected_at,omitempty"`
 	GeminiYoloMode     *bool           `json:"gemini_yolo_mode,omitempty"`
@@ -74,9 +74,13 @@ type toolDataBlob struct {
 	OpenCodeDetectedAt int64           `json:"opencode_detected_at,omitempty"`
 	CodexSessionID     string          `json:"codex_session_id,omitempty"`
 	CodexDetectedAt    int64           `json:"codex_detected_at,omitempty"`
-	LatestPrompt       string          `json:"latest_prompt,omitempty"`
 	LoadedMCPNames     []string        `json:"loaded_mcp_names,omitempty"`
 	ToolOptions        json.RawMessage `json:"tool_options,omitempty"`
+	ColorScheme        string          `json:"color_scheme,omitempty"`
+	Flag               int             `json:"flag,omitempty"`
+	LastLogActivity    int64           `json:"last_log_activity,omitempty"`
+	// Parked is a legacy bool (superseded by Flag); still read for migration.
+	Parked bool `json:"parked,omitempty"`
 }
 
 // MigrateFromJSON reads a sessions.json file and inserts all data into the StateDB.
@@ -102,7 +106,6 @@ func MigrateFromJSON(jsonPath string, db *StateDB) (int, int, error) {
 			GeminiModel:       inst.GeminiModel,
 			OpenCodeSessionID: inst.OpenCodeSessionID,
 			CodexSessionID:    inst.CodexSessionID,
-			LatestPrompt:      inst.LatestPrompt,
 			LoadedMCPNames:    inst.LoadedMCPNames,
 			ToolOptions:       inst.ToolOptionsJSON,
 		}
@@ -173,24 +176,27 @@ func MigrateFromJSON(jsonPath string, db *StateDB) (int, int, error) {
 // MarshalToolData creates a tool_data JSON blob from individual fields.
 // This is the forward path: Instance fields -> JSON blob for SQLite storage.
 func MarshalToolData(
-	claudeSessionID string, claudeDetectedAt time.Time,
+	claudeSessionID string, claudeDetectedAt time.Time, claudeModel string,
 	geminiSessionID string, geminiDetectedAt time.Time,
 	geminiYoloMode *bool, geminiModel string,
 	openCodeSessionID string, openCodeDetectedAt time.Time,
 	codexSessionID string, codexDetectedAt time.Time,
-	latestPrompt string, loadedMCPNames []string,
-	toolOptionsJSON json.RawMessage,
+	loadedMCPNames []string,
+	toolOptionsJSON json.RawMessage, colorScheme string, flag int, lastLogActivity int64,
 ) json.RawMessage {
 	td := toolDataBlob{
 		ClaudeSessionID:   claudeSessionID,
+		ClaudeModel:       claudeModel,
 		GeminiSessionID:   geminiSessionID,
 		GeminiYoloMode:    geminiYoloMode,
 		GeminiModel:       geminiModel,
 		OpenCodeSessionID: openCodeSessionID,
 		CodexSessionID:    codexSessionID,
-		LatestPrompt:      latestPrompt,
 		LoadedMCPNames:    loadedMCPNames,
 		ToolOptions:       toolOptionsJSON,
+		ColorScheme:       colorScheme,
+		Flag:              flag,
+		LastLogActivity:   lastLogActivity,
 	}
 	if !claudeDetectedAt.IsZero() {
 		td.ClaudeDetectedAt = claudeDetectedAt.Unix()
@@ -211,13 +217,13 @@ func MarshalToolData(
 // UnmarshalToolData extracts individual fields from the tool_data JSON blob.
 // This is the reverse path: JSON blob from SQLite -> individual Instance fields.
 func UnmarshalToolData(data json.RawMessage) (
-	claudeSessionID string, claudeDetectedAt time.Time,
+	claudeSessionID string, claudeDetectedAt time.Time, claudeModel string,
 	geminiSessionID string, geminiDetectedAt time.Time,
 	geminiYoloMode *bool, geminiModel string,
 	openCodeSessionID string, openCodeDetectedAt time.Time,
 	codexSessionID string, codexDetectedAt time.Time,
-	latestPrompt string, loadedMCPNames []string,
-	toolOptionsJSON json.RawMessage,
+	loadedMCPNames []string,
+	toolOptionsJSON json.RawMessage, colorScheme string, flag int, lastLogActivity int64,
 ) {
 	if len(data) == 0 {
 		return
@@ -227,6 +233,7 @@ func UnmarshalToolData(data json.RawMessage) (
 		return
 	}
 	claudeSessionID = td.ClaudeSessionID
+	claudeModel = td.ClaudeModel
 	if td.ClaudeDetectedAt > 0 {
 		claudeDetectedAt = time.Unix(td.ClaudeDetectedAt, 0)
 	}
@@ -244,8 +251,15 @@ func UnmarshalToolData(data json.RawMessage) (
 	if td.CodexDetectedAt > 0 {
 		codexDetectedAt = time.Unix(td.CodexDetectedAt, 0)
 	}
-	latestPrompt = td.LatestPrompt
 	loadedMCPNames = td.LoadedMCPNames
 	toolOptionsJSON = td.ToolOptions
+	colorScheme = td.ColorScheme
+	flag = td.Flag
+	lastLogActivity = td.LastLogActivity
+	// Legacy migration: an old row stored parked as a bool. Map it to the
+	// parked-red flag value (2 == session.FlagParkedRed) when no flag is set.
+	if flag == 0 && td.Parked {
+		flag = 2
+	}
 	return
 }

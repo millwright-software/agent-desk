@@ -412,8 +412,8 @@ func TestBuildClaudeCommand_CustomAlias(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.Setenv("HOME", tmpDir)
 
-	// Create ~/.agent-deck/config.toml with custom command
-	configDir := filepath.Join(tmpDir, ".agent-deck")
+	// Create ~/.agent-desk/config.toml with custom command
+	configDir := filepath.Join(tmpDir, ".agent-desk")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		t.Fatalf("failed to create config dir: %v", err)
 	}
@@ -1169,6 +1169,29 @@ func TestInstance_UpdateGeminiSession(t *testing.T) {
 	}
 }
 
+func TestBuildCopilotCommand(t *testing.T) {
+	inst := NewInstanceWithTool("test", "/tmp/test", "copilot")
+
+	// Bare "copilot" starts fresh.
+	if got := inst.buildCopilotCommand("copilot"); got != "copilot" {
+		t.Errorf("buildCopilotCommand(\"copilot\") = %q, want \"copilot\"", got)
+	}
+	// Empty command also starts fresh.
+	if got := inst.buildCopilotCommand(""); got != "copilot" {
+		t.Errorf("buildCopilotCommand(\"\") = %q, want \"copilot\"", got)
+	}
+	// An explicit custom command is returned as-is.
+	if got := inst.buildCopilotCommand("copilot --continue"); got != "copilot --continue" {
+		t.Errorf("buildCopilotCommand(custom) = %q, want it unchanged", got)
+	}
+
+	// For a non-copilot tool, the method is a no-op passthrough.
+	other := NewInstanceWithTool("test2", "/tmp/test2", "claude")
+	if got := other.buildCopilotCommand("something"); got != "something" {
+		t.Errorf("buildCopilotCommand on non-copilot tool should passthrough, got %q", got)
+	}
+}
+
 func TestBuildGeminiCommand(t *testing.T) {
 	inst := NewInstanceWithTool("test", "/tmp/test", "gemini")
 
@@ -1292,7 +1315,7 @@ func TestInstance_RegenerateMCPConfig_ReturnsError(t *testing.T) {
 	}
 
 	// Test case 2: Valid path with empty .mcp.json - returns nil
-	tmpDir, err := os.MkdirTemp("", "agentdeck-test-*")
+	tmpDir, err := os.MkdirTemp("", "agentdesk-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -1338,7 +1361,7 @@ func TestInstance_RegenerateMCPConfig_WriteFailure(t *testing.T) {
 	}
 
 	// Create a temp directory
-	tmpDir, err := os.MkdirTemp("", "agentdeck-test-*")
+	tmpDir, err := os.MkdirTemp("", "agentdesk-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -1951,7 +1974,7 @@ func TestSessionHasConversationData(t *testing.T) {
 // clears the MCP cache before reading, so externally-modified .mcp.json files
 // are picked up instead of stale cached data (fixes #97).
 func TestRegenerate_MCPConfig_InvalidatesCache(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agentdeck-test-*")
+	tmpDir, err := os.MkdirTemp("", "agentdesk-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -2064,7 +2087,7 @@ func TestBuildClaudeExtraFlags_NilOpts(t *testing.T) {
 	}
 }
 
-// TestBuildClaudeCommand_ExportsInstanceID verifies that AGENTDECK_INSTANCE_ID
+// TestBuildClaudeCommand_ExportsInstanceID verifies that AGENTDESK_INSTANCE_ID
 // is included in the command string for Claude sessions.
 func TestBuildClaudeCommand_ExportsInstanceID(t *testing.T) {
 	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -2083,14 +2106,14 @@ func TestBuildClaudeCommand_ExportsInstanceID(t *testing.T) {
 	inst := NewInstanceWithTool("test", "/tmp/test", "claude")
 	cmd := inst.buildClaudeCommand("claude")
 
-	// AGENTDECK_INSTANCE_ID should be in the command as an env var prefix
-	expectedPrefix := "AGENTDECK_INSTANCE_ID=" + inst.ID
+	// AGENTDESK_INSTANCE_ID should be in the command as an env var prefix
+	expectedPrefix := "AGENTDESK_INSTANCE_ID=" + inst.ID
 	if !strings.Contains(cmd, expectedPrefix) {
 		t.Errorf("Command should contain %q, got: %s", expectedPrefix, cmd)
 	}
 }
 
-// TestBuildClaudeResumeCommand_ExportsInstanceID verifies that AGENTDECK_INSTANCE_ID
+// TestBuildClaudeResumeCommand_ExportsInstanceID verifies that AGENTDESK_INSTANCE_ID
 // is included in the resume command string.
 func TestBuildClaudeResumeCommand_ExportsInstanceID(t *testing.T) {
 	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -2111,7 +2134,7 @@ func TestBuildClaudeResumeCommand_ExportsInstanceID(t *testing.T) {
 
 	cmd := inst.buildClaudeResumeCommand()
 
-	expectedPrefix := "AGENTDECK_INSTANCE_ID=" + inst.ID
+	expectedPrefix := "AGENTDESK_INSTANCE_ID=" + inst.ID
 	if !strings.Contains(cmd, expectedPrefix) {
 		t.Errorf("Resume command should contain %q, got: %s", expectedPrefix, cmd)
 	}
@@ -2182,5 +2205,140 @@ func TestInstance_UpdateHookStatus_Nil(t *testing.T) {
 
 	if inst.hookStatus != "" {
 		t.Errorf("hookStatus should be empty, got %q", inst.hookStatus)
+	}
+}
+
+func TestShortClaudeModel(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{"", ""},
+		{"claude-fable-5", "f5"},
+		{"claude-opus-4-8", "o4.8"},
+		{"claude-sonnet-5", "s5"},
+		{"claude-haiku-4-5-20251001", "h4.5"},
+		{"claude-3-5-sonnet-20241022", "s3.5"},
+		{"gpt-4o", "gpt-4o"}, // non-claude IDs pass through
+	}
+	for _, tt := range tests {
+		if got := shortClaudeModel(tt.id); got != tt.want {
+			t.Errorf("shortClaudeModel(%q) = %q, want %q", tt.id, got, tt.want)
+		}
+	}
+}
+
+func TestModelShortNameByTool(t *testing.T) {
+	claude := &Instance{Tool: "claude", ClaudeModel: "claude-fable-5"}
+	if got := claude.ModelShortName(); got != "f5" {
+		t.Errorf("claude ModelShortName = %q, want f5", got)
+	}
+
+	yolo := true
+	gemini := &Instance{Tool: "gemini", GeminiModel: "gemini-2.5-pro", GeminiYoloMode: &yolo}
+	if got := gemini.ModelShortName(); got != "g2.5p" {
+		t.Errorf("gemini ModelShortName = %q, want g2.5p", got)
+	}
+	if !gemini.IsAutoMode() {
+		t.Error("gemini with yolo should be auto mode")
+	}
+
+	unknown := &Instance{Tool: "codex"}
+	if got := unknown.ModelShortName(); got != "" {
+		t.Errorf("codex ModelShortName = %q, want empty", got)
+	}
+}
+
+func TestIsAutoModeClaude(t *testing.T) {
+	inst := &Instance{Tool: "claude"}
+	if inst.IsAutoMode() {
+		t.Error("no options should mean manual mode")
+	}
+
+	if err := inst.SetClaudeOptions(&ClaudeOptions{SkipPermissions: true}); err != nil {
+		t.Fatalf("SetClaudeOptions: %v", err)
+	}
+	if !inst.IsAutoMode() {
+		t.Error("skip-permissions should mean auto mode")
+	}
+
+	// Cache must invalidate when options change
+	if err := inst.SetClaudeOptions(&ClaudeOptions{SkipPermissions: false}); err != nil {
+		t.Fatalf("SetClaudeOptions: %v", err)
+	}
+	if inst.IsAutoMode() {
+		t.Error("auto-mode cache should invalidate when options change")
+	}
+}
+
+func TestParseClaudeModel(t *testing.T) {
+	jsonl := `{"message":{"role":"user","content":"hello there"}}
+{"message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"hi"}]}}
+{"message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"later"}]}}
+{"message":{"role":"user","content":"second prompt"}}
+`
+	if model := parseClaudeModel([]byte(jsonl)); model != "claude-fable-5" {
+		t.Errorf("model = %q, want claude-fable-5 (most recent)", model)
+	}
+	if model := parseClaudeModel([]byte("not json\n")); model != "" {
+		t.Errorf("model = %q, want empty for junk", model)
+	}
+}
+
+func TestShortGeminiModel(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{"", ""},
+		{"gemini-2.5-pro", "g2.5p"},
+		{"gemini-2.5-flash", "g2.5f"},
+		{"gemini-1.5-pro", "g1.5p"},
+		{"gemini-3-pro", "g3p"},
+		{"gemini-3-flash-preview", "g3f"},
+		{"gemini-2.5-flash-lite", "g2.5f"},
+	}
+	for _, tt := range tests {
+		if got := shortGeminiModel(tt.id); got != tt.want {
+			t.Errorf("shortGeminiModel(%q) = %q, want %q", tt.id, got, tt.want)
+		}
+	}
+}
+
+func TestSessionFlagCycle(t *testing.T) {
+	// u-key cycle: none → unread → parked-red → parked-blue → none
+	want := []SessionFlag{FlagUnread, FlagParkedRed, FlagParkedBlue, FlagNone}
+	f := FlagNone
+	for i, w := range want {
+		f = f.Next()
+		if f != w {
+			t.Fatalf("step %d: got %d, want %d", i, f, w)
+		}
+	}
+	// IsParked / IsSet semantics
+	if FlagUnread.IsParked() {
+		t.Error("unread should not be parked")
+	}
+	if !FlagParkedBlue.IsParked() || !FlagParkedRed.IsParked() {
+		t.Error("parked-red/blue should be parked")
+	}
+	if FlagNone.IsSet() {
+		t.Error("none should not be set")
+	}
+}
+
+func TestGetLastActivityTimePrefersLog(t *testing.T) {
+	created := time.Now().Add(-48 * time.Hour)
+	logMtime := time.Now().Add(-30 * time.Minute)
+
+	inst := &Instance{Tool: "claude", CreatedAt: created}
+	// With no log signal yet, it falls back to CreatedAt.
+	if got := inst.GetLastActivityTime(); !got.Equal(created) {
+		t.Errorf("fallback = %v, want CreatedAt %v", got, created)
+	}
+	// Once the transcript mtime is known, it wins.
+	inst.lastLogActivityAt = logMtime
+	if got := inst.GetLastActivityTime(); !got.Equal(logMtime) {
+		t.Errorf("with log mtime = %v, want %v", got, logMtime)
 	}
 }

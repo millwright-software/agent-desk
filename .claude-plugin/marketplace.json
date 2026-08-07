@@ -1,21 +1,21 @@
 {
-  "name": "agent-deck",
+  "name": "agent-desk",
   "owner": {
-    "name": "Ashesh Goplani",
-    "email": "ashesh.goplani96@gmail.com"
+    "name": "Millwright Software",
+    "email": "249657134+millwright-software@users.noreply.github.com"
   },
   "metadata": {
-    "description": "Skills for managing AI coding agent sessions with agent-deck CLI",
+    "description": "Skills for managing AI coding agent sessions with agent-desk CLI",
     "version": "1.0.0"
   },
   "plugins": [
     {
-      "name": "agent-deck",
-      "description": "Complete guide for managing AI coding agent sessions via agent-deck CLI - session lifecycle, MCP management, groups, profiles, and automation",
+      "name": "agent-desk",
+      "description": "Complete guide for managing AI coding agent sessions via agent-desk CLI - session lifecycle, MCP management, groups, profiles, and automation",
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/agent-deck"
+        "./skills/agent-desk"
       ]
     }
   ]

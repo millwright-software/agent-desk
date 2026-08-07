@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 )
 
 var migrationLog = logging.ForComponent(logging.CompSession)
@@ -25,21 +25,21 @@ type MigrationResult struct {
 //
 // Old layout:
 //
-//	~/.agent-deck/sessions.json
-//	~/.agent-deck/sessions.json.bak
-//	~/.agent-deck/sessions.json.bak.1
-//	~/.agent-deck/sessions.json.bak.2
+//	~/.agent-desk/sessions.json
+//	~/.agent-desk/sessions.json.bak
+//	~/.agent-desk/sessions.json.bak.1
+//	~/.agent-desk/sessions.json.bak.2
 //
 // New layout:
 //
-//	~/.agent-deck/config.json
-//	~/.agent-deck/profiles/default/sessions.json
-//	~/.agent-deck/profiles/default/sessions.json.bak
-//	~/.agent-deck/profiles/default/sessions.json.bak.1
-//	~/.agent-deck/profiles/default/sessions.json.bak.2
-//	~/.agent-deck/logs/ (unchanged)
+//	~/.agent-desk/config.json
+//	~/.agent-desk/profiles/default/sessions.json
+//	~/.agent-desk/profiles/default/sessions.json.bak
+//	~/.agent-desk/profiles/default/sessions.json.bak.1
+//	~/.agent-desk/profiles/default/sessions.json.bak.2
+//	~/.agent-desk/logs/ (unchanged)
 func MigrateToProfiles() (*MigrationResult, error) {
-	agentDeckDir, err := GetAgentDeckDir()
+	agentDeckDir, err := GetAgentDeskDir()
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func MigrateToProfiles() (*MigrationResult, error) {
 
 // NeedsMigration checks if migration from old layout is needed
 func NeedsMigration() (bool, error) {
-	agentDeckDir, err := GetAgentDeckDir()
+	agentDeckDir, err := GetAgentDeskDir()
 	if err != nil {
 		return false, err
 	}

@@ -21,13 +21,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/asheshgoplani/agent-deck/internal/clipboard"
-	"github.com/asheshgoplani/agent-deck/internal/git"
-	"github.com/asheshgoplani/agent-deck/internal/logging"
-	"github.com/asheshgoplani/agent-deck/internal/session"
-	"github.com/asheshgoplani/agent-deck/internal/statedb"
-	"github.com/asheshgoplani/agent-deck/internal/tmux"
-	"github.com/asheshgoplani/agent-deck/internal/update"
+	"github.com/millwright-software/agent-desk/internal/clipboard"
+	"github.com/millwright-software/agent-desk/internal/git"
+	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/session"
+	"github.com/millwright-software/agent-desk/internal/statedb"
+	"github.com/millwright-software/agent-desk/internal/tmux"
+	"github.com/millwright-software/agent-desk/internal/update"
 )
 
 // Version is set by main.go for update checking
@@ -49,10 +49,15 @@ var (
 )
 
 const (
-	// tickInterval for UI refresh and status updates
-	// Background worker polls at 2s intervals for status detection
-	// At 2s: 2-5 CapturePane() calls/sec = minimal CPU overhead
+	// tickInterval paces the foreground path: spinner animation and the
+	// adaptive status trigger (fires only when the user interacted recently).
 	tickInterval = 2 * time.Second
+
+	// backgroundPollInterval is the always-on status backstop (runs even when
+	// the TUI is idle/paused). Real-time transitions come from control-mode
+	// %output events and Claude hooks; this is just the safety net, so it can
+	// be slow to keep idle CPU/subprocess churn low.
+	backgroundPollInterval = 10 * time.Second
 
 	// logCheckInterval - how often to check for oversized logs (fast check, just file stats)
 	// This catches runaway logs before they cause high CPU
@@ -121,8 +126,9 @@ const (
 // Home is the main application model
 type Home struct {
 	// Dimensions
-	width  int
-	height int
+	width               int
+	height              int
+	sidebarWidthPercent int // Configurable sidebar width for dual-column layout (15-50%)
 
 	// Profile
 	profile string // The profile this Home is displaying
@@ -149,8 +155,10 @@ type Home struct {
 	settingsPanel        *SettingsPanel        // For editing settings
 	analyticsPanel       *AnalyticsPanel       // For displaying session analytics
 	geminiModelDialog    *GeminiModelDialog    // For selecting Gemini model
+	colorSchemeDialog    *ColorSchemeDialog    // For picking a per-session color scheme
 	sessionPickerDialog  *SessionPickerDialog  // For sending output to another session
 	worktreeFinishDialog *WorktreeFinishDialog // For finishing worktree sessions (merge + cleanup)
+	worktreeManager      *WorktreeManager      // For listing worktrees and removing orphans
 
 	// Analytics cache (async fetching with TTL)
 	currentAnalytics       *session.SessionAnalytics                  // Current analytics for selected session (Claude)
@@ -316,10 +324,11 @@ type reloadState struct {
 
 // uiState persists cursor, preview mode, and status filter across restarts
 type uiState struct {
-	CursorSessionID string `json:"cursor_session_id,omitempty"`
-	CursorGroupPath string `json:"cursor_group_path,omitempty"`
-	PreviewMode     int    `json:"preview_mode"`
-	StatusFilter    string `json:"status_filter,omitempty"`
+	CursorSessionID     string `json:"cursor_session_id,omitempty"`
+	CursorGroupPath     string `json:"cursor_group_path,omitempty"`
+	PreviewMode         int    `json:"preview_mode"`
+	StatusFilter        string `json:"status_filter,omitempty"`
+	SidebarWidthPercent int    `json:"sidebar_width_percent,omitempty"`
 }
 
 // deletedSessionEntry holds a deleted session for undo restore
@@ -453,6 +462,20 @@ type worktreeFinishResultMsg struct {
 	err          error
 }
 
+// worktreeManagerLoadedMsg is sent when the worktree manager's async scan completes
+type worktreeManagerLoadedMsg struct {
+	repoRoot string
+	rows     []worktreeManagerRow
+	err      error
+}
+
+// worktreeManagerRemoveResultMsg is sent when removing an orphaned worktree completes
+type worktreeManagerRemoveResultMsg struct {
+	repoRoot string
+	path     string
+	err      error
+}
+
 // statusUpdateRequest is sent to the background worker with current viewport info
 type statusUpdateRequest struct {
 	viewOffset    int      // Current scroll position
@@ -515,8 +538,10 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		settingsPanel:        NewSettingsPanel(),
 		analyticsPanel:       NewAnalyticsPanel(),
 		geminiModelDialog:    NewGeminiModelDialog(),
+		colorSchemeDialog:    NewColorSchemeDialog(),
 		sessionPickerDialog:  NewSessionPickerDialog(),
 		worktreeFinishDialog: NewWorktreeFinishDialog(),
+		worktreeManager:      NewWorktreeManager(),
 		cursor:               0,
 		initialLoading:       true, // Show splash until sessions load
 		ctx:                  ctx,
@@ -547,6 +572,16 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 
 	// Restore persisted UI state (preview mode, status filter, cursor position)
 	h.loadUIState()
+
+	// Apply layered sidebar width defaults: uiState > config.toml > hardcoded 35
+	if h.sidebarWidthPercent == 0 {
+		if config, _ := session.LoadUserConfig(); config != nil &&
+			config.UI.SidebarWidthPercent >= 15 && config.UI.SidebarWidthPercent <= 50 {
+			h.sidebarWidthPercent = config.UI.SidebarWidthPercent
+		} else {
+			h.sidebarWidthPercent = 35
+		}
+	}
 
 	// Initialize notification manager if enabled in config
 	// All instances manage the notification bar (they share SQLite state, so produce identical output)
@@ -617,7 +652,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 
 	// Initialize global search
 	// DISABLED: Global search opens 884+ directory watchers and loads 4.4 GB of JSONL
-	// content into memory, causing agent-deck to balloon to 6+ GB and get OOM-killed.
+	// content into memory, causing agent-desk to balloon to 6+ GB and get OOM-killed.
 	// TODO: Fix by limiting watched dirs and enforcing balanced tier for large datasets.
 	h.globalSearch = NewGlobalSearch()
 	// claudeDir := session.GetClaudeConfigDir()
@@ -887,13 +922,8 @@ func (h *Home) syncViewport() {
 	// - Maintenance banner: 0 or 1 line (when maintenance completed)
 	// - Main content: contentHeight lines
 	// - Help bar: 2 lines (border + content)
-	// Panel title within content: 2 lines (title + underline)
-	// Panel content: contentHeight - 2 lines
 	helpBarHeight := 2
-	panelTitleLines := 2 // SESSIONS title + underline (matches View())
 
-	// Filter bar is always shown for consistent layout (matches View())
-	filterBarHeight := 1
 	updateBannerHeight := 0
 	if h.updateInfo != nil && h.updateInfo.Available {
 		updateBannerHeight = 1
@@ -904,8 +934,7 @@ func (h *Home) syncViewport() {
 	}
 
 	// contentHeight = total height for main content area
-	// -1 for header line, -helpBarHeight for help bar, -updateBannerHeight, -maintenanceBannerHeight, -filterBarHeight
-	contentHeight := h.height - 1 - helpBarHeight - updateBannerHeight - maintenanceBannerHeight - filterBarHeight
+	contentHeight := h.height - helpBarHeight - updateBannerHeight - maintenanceBannerHeight
 
 	// CRITICAL: Calculate panelContentHeight based on current layout mode
 	// This MUST match the calculations in renderStackedLayout/renderDualColumnLayout/renderSingleColumnLayout
@@ -913,20 +942,18 @@ func (h *Home) syncViewport() {
 	layoutMode := h.getLayoutMode()
 	switch layoutMode {
 	case LayoutModeStacked:
-		// Stacked layout: list gets 60% of height, minus title (2 lines)
-		// Must match: listHeight := (totalHeight * 60) / 100; listContent height = listHeight - 2
+		// Stacked layout: list gets 60% of height
 		listHeight := (contentHeight * 60) / 100
 		if listHeight < 5 {
 			listHeight = 5
 		}
-		panelContentHeight = listHeight - panelTitleLines
+		panelContentHeight = listHeight
 	case LayoutModeSingle:
-		// Single column: list gets full height minus title
-		// Must match: listHeight := totalHeight - 2
-		panelContentHeight = contentHeight - panelTitleLines
+		// Single column: list gets full height
+		panelContentHeight = contentHeight
 	default: // LayoutModeDual
-		// Dual layout: list panel gets full contentHeight minus title
-		panelContentHeight = contentHeight - panelTitleLines
+		// Dual layout: list panel gets full contentHeight
+		panelContentHeight = contentHeight
 	}
 
 	// maxVisible = how many items can be shown (reserving 1 for "more below" indicator)
@@ -985,7 +1012,7 @@ func (h *Home) syncViewport() {
 // All notification sync is now handled by syncNotificationsBackground() which runs
 // every 2s in the background worker, including during tea.Exec pauses.
 
-// getAttachedSessionID returns the instance ID of the currently attached agentdeck session.
+// getAttachedSessionID returns the instance ID of the currently attached agentdesk session.
 // This detects which session the user is viewing, even if they switched via tmux directly.
 func (h *Home) getAttachedSessionID() string {
 	attachedSessions, err := tmux.GetAttachedSessions()
@@ -996,7 +1023,7 @@ func (h *Home) getAttachedSessionID() string {
 	h.instancesMu.RLock()
 	defer h.instancesMu.RUnlock()
 
-	// Find the first attached agentdeck session
+	// Find the first attached agentdesk session
 	for _, sessName := range attachedSessions {
 		for _, inst := range h.instances {
 			if ts := inst.GetTmuxSession(); ts != nil && ts.Name == sessName {
@@ -1032,8 +1059,6 @@ func (h *Home) cleanupNotifications() {
 // Used for vi-style pagination (Ctrl+u/d/f/b)
 func (h *Home) getVisibleHeight() int {
 	helpBarHeight := 2
-	panelTitleLines := 2
-	filterBarHeight := 1
 	updateBannerHeight := 0
 	if h.updateInfo != nil && h.updateInfo.Available {
 		updateBannerHeight = 1
@@ -1043,7 +1068,7 @@ func (h *Home) getVisibleHeight() int {
 		maintenanceBannerHeight = 1
 	}
 
-	contentHeight := h.height - 1 - helpBarHeight - updateBannerHeight - maintenanceBannerHeight - filterBarHeight
+	contentHeight := h.height - helpBarHeight - updateBannerHeight - maintenanceBannerHeight
 
 	var panelContentHeight int
 	layoutMode := h.getLayoutMode()
@@ -1053,11 +1078,11 @@ func (h *Home) getVisibleHeight() int {
 		if listHeight < 5 {
 			listHeight = 5
 		}
-		panelContentHeight = listHeight - panelTitleLines
+		panelContentHeight = listHeight
 	case LayoutModeSingle:
-		panelContentHeight = contentHeight - panelTitleLines
+		panelContentHeight = contentHeight
 	default: // LayoutModeDual
-		panelContentHeight = contentHeight - panelTitleLines
+		panelContentHeight = contentHeight
 	}
 
 	maxVisible := panelContentHeight - 1
@@ -1557,7 +1582,7 @@ func (h *Home) statusWorker() {
 	// Internal ticker - independent of Bubble Tea event loop
 	// This is the key insight: when tea.Exec suspends the TUI (user attaches to session),
 	// the Bubble Tea tick messages stop firing, but this goroutine keeps running
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(backgroundPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -2070,6 +2095,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.setupWizard.SetSize(msg.Width, msg.Height)
 		h.settingsPanel.SetSize(msg.Width, msg.Height)
 		h.geminiModelDialog.SetSize(msg.Width, msg.Height)
+		h.colorSchemeDialog.SetSize(msg.Width, msg.Height)
 		return h, nil
 
 	case loadSessionsMsg:
@@ -2524,6 +2550,8 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionRestartedMsg:
 		if msg.err != nil {
+			// Restart failed - clear resuming animation immediately so user can retry.
+			delete(h.resumingSessions, msg.sessionID)
 			h.setError(fmt.Errorf("failed to restart session: %w", msg.err))
 		} else {
 			// Find the instance and refresh its MCP state (O(1) lookup)
@@ -2609,6 +2637,19 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.errTime = time.Now()
 			}
 			// Force save to persist the model change
+			h.forceSaveInstances()
+		}
+		return h, nil
+
+	case colorSchemeSelectedMsg:
+		// Apply the chosen color scheme to the session (tmux + persisted), then
+		// refresh the preview so the pane tint updates immediately.
+		h.instancesMu.RLock()
+		inst := h.instanceByID[msg.instanceID]
+		h.instancesMu.RUnlock()
+		if inst != nil {
+			inst.SetColorScheme(msg.scheme)
+			h.invalidatePreviewCache(inst.ID)
 			h.forceSaveInstances()
 		}
 		return h, nil
@@ -2946,6 +2987,28 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.setError(fmt.Errorf("%s", successMsg))
 		return h, nil
 
+	case worktreeManagerLoadedMsg:
+		if !h.worktreeManager.IsVisible() {
+			return h, nil
+		}
+		if msg.err != nil {
+			h.worktreeManager.SetError(msg.err.Error())
+			return h, nil
+		}
+		h.worktreeManager.SetRows(msg.rows)
+		return h, nil
+
+	case worktreeManagerRemoveResultMsg:
+		if !h.worktreeManager.IsVisible() {
+			return h, nil
+		}
+		if msg.err != nil {
+			h.worktreeManager.SetError(msg.err.Error())
+			return h, nil
+		}
+		// Rescan after a successful removal to refresh the list
+		return h, h.loadWorktreeManagerRows(msg.repoRoot)
+
 	case copyResultMsg:
 		if msg.err != nil {
 			h.setError(msg.err)
@@ -3125,7 +3188,13 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					h.err = err
 					h.errTime = time.Now()
 				}
-				_, _ = session.ReloadUserConfig()
+				config, _ = session.ReloadUserConfig()
+
+				// Apply sidebar width from settings
+				if config != nil && config.UI.SidebarWidthPercent >= 15 && config.UI.SidebarWidthPercent <= 50 {
+					h.sidebarWidthPercent = config.UI.SidebarWidthPercent
+					h.saveUIState()
+				}
 
 				// Apply theme changes live
 				h.stopThemeWatcher()
@@ -3181,11 +3250,19 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.geminiModelDialog = d
 			return h, cmd
 		}
+		if h.colorSchemeDialog.IsVisible() {
+			d, cmd := h.colorSchemeDialog.Update(msg)
+			h.colorSchemeDialog = d
+			return h, cmd
+		}
 		if h.sessionPickerDialog.IsVisible() {
 			return h.handleSessionPickerDialogKey(msg)
 		}
 		if h.worktreeFinishDialog.IsVisible() {
 			return h.handleWorktreeFinishDialogKey(msg)
+		}
+		if h.worktreeManager.IsVisible() {
+			return h.handleWorktreeManagerKey(msg)
 		}
 
 		// Main view keys
@@ -3229,6 +3306,7 @@ func (h *Home) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Check if user wants to switch to global search
 	if h.search.WantsSwitchToGlobal() && h.globalSearchIndex != nil {
 		h.globalSearch.SetSize(h.width, h.height)
+		h.globalSearch.SetSidebarWidth(h.sidebarWidthPercent)
 		h.globalSearch.Show()
 	}
 
@@ -3265,7 +3343,7 @@ func (h *Home) handleGlobalSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleGlobalSearchSelection handles selection from global search
 func (h *Home) handleGlobalSearchSelection(result *GlobalSearchResult) tea.Cmd {
-	// Check if session already exists in Agent Deck
+	// Check if session already exists in Agent Desk
 	h.instancesMu.RLock()
 	for _, inst := range h.instances {
 		if inst.ClaudeSessionID == result.SessionID {
@@ -3299,7 +3377,7 @@ func (h *Home) jumpToSession(inst *session.Instance) {
 	}
 }
 
-// createSessionFromGlobalSearch creates a new Agent Deck session from global search result
+// createSessionFromGlobalSearch creates a new Agent Desk session from global search result
 func (h *Home) createSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd {
 	return func() tea.Msg {
 		// Derive title from CWD or session ID
@@ -3585,13 +3663,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "G": // Open global search (fall back to local search if index not available)
-		if h.globalSearchIndex != nil {
-			h.globalSearch.SetSize(h.width, h.height)
-			h.globalSearch.Show()
-		} else {
-			h.search.Show()
-		}
+	case "G": // Create a new top-level (root) group, regardless of cursor context
+		h.groupDialog.Show()
 		return h, nil
 
 	case "enter":
@@ -3721,42 +3794,6 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "f":
-		// Quick fork session (same title with " (fork)" suffix)
-		// Only available when session has a valid Claude session ID
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil {
-				// Block fork during animations to prevent concurrent operations
-				if h.hasActiveAnimation(item.Session.ID) {
-					h.setError(fmt.Errorf("session is starting, please wait..."))
-					return h, nil
-				}
-				if item.Session.CanFork() {
-					return h, h.quickForkSession(item.Session)
-				}
-			}
-		}
-		return h, nil
-
-	case "F", "shift+f":
-		// Fork with dialog (customize title and group)
-		// Only available when session has a valid Claude session ID
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil {
-				// Block fork during animations to prevent concurrent operations
-				if h.hasActiveAnimation(item.Session.ID) {
-					h.setError(fmt.Errorf("session is starting, please wait..."))
-					return h, nil
-				}
-				if item.Session.CanFork() {
-					return h, h.forkSessionWithDialog(item.Session)
-				}
-			}
-		}
-		return h, nil
-
 	case "M", "shift+m":
 		// MCP Manager - for Claude and Gemini sessions
 		if h.cursor < len(h.flatItems) {
@@ -3798,6 +3835,17 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return h, nil
+
+	case "O", "shift+o":
+		// Worktree manager - list worktrees and remove orphans
+		repoRoot := h.resolveWorktreeRepoRoot()
+		if repoRoot == "" {
+			h.setError(fmt.Errorf("not in a git repository (no worktree repo found)"))
+			return h, nil
+		}
+		h.worktreeManager.SetSize(h.width, h.height)
+		h.worktreeManager.Show(repoRoot)
+		return h, h.loadWorktreeManagerRows(repoRoot)
 
 	case "g":
 		// Vi-style gg to jump to top (#38) - check for double-tap first
@@ -3859,6 +3907,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open global search first if available, otherwise local search
 		if h.globalSearchIndex != nil {
 			h.globalSearch.SetSize(h.width, h.height)
+			h.globalSearch.SetSidebarWidth(h.sidebarWidthPercent)
 			h.globalSearch.Show()
 		} else {
 			h.search.Show()
@@ -3969,23 +4018,43 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, h.importSessions
 
 	case "u":
-		// Mark session as unread (idle → waiting)
+		// Cycle the manual read-state marker: none → unread (blue) → parked
+		// (dim red) → none. Both are quiet visual overlays driven purely by the
+		// stored flags, so the cycle is deterministic and never depends on the
+		// live tmux status recomputing underneath us.
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
-				tmuxSess := item.Session.GetTmuxSession()
-				if tmuxSess != nil {
-					tmuxSess.ResetAcknowledged()
-					// Persist to SQLite so background sync doesn't overwrite
-					if db := statedb.GetGlobal(); db != nil {
-						_ = db.SetAcknowledged(item.Session.ID, false)
+				inst := item.Session
+				inst.Flag = inst.Flag.Next()
+				// Setting any marker mutes the session's auto-attention so the
+				// bookmark stays quiet; the dot color is the only signal.
+				if inst.Flag.IsSet() {
+					if tmuxSess := inst.GetTmuxSession(); tmuxSess != nil {
+						tmuxSess.Acknowledge()
 					}
-					// Clear idle optimization so UpdateStatus does a full check
-					item.Session.ForceNextStatusCheck()
-					_ = item.Session.UpdateStatus()
-					h.saveInstances()
+					if db := statedb.GetGlobal(); db != nil {
+						_ = db.SetAcknowledged(inst.ID, true)
+					}
 				}
+				h.saveInstances()
 			}
+		}
+		return h, nil
+
+	case "[":
+		// Decrease sidebar width by 5%, min 15%
+		if h.sidebarWidthPercent > 15 {
+			h.sidebarWidthPercent -= 5
+			h.saveUIState()
+		}
+		return h, nil
+
+	case "]":
+		// Increase sidebar width by 5%, max 50%
+		if h.sidebarWidthPercent < 50 {
+			h.sidebarWidthPercent += 5
+			h.saveUIState()
 		}
 		return h, nil
 
@@ -4043,37 +4112,19 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "c":
-		// Copy last AI response to system clipboard
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil {
-				return h, h.copySessionOutput(item.Session)
-			}
-		}
-		return h, nil
-
-	case "x":
-		// Send session output to another session
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil {
-				others := h.getOtherActiveSessions(item.Session.ID)
-				if len(others) == 0 {
-					h.setError(fmt.Errorf("no other sessions to send to"))
-					return h, nil
-				}
-				h.sessionPickerDialog.SetSize(h.width, h.height)
-				h.sessionPickerDialog.Show(item.Session, h.instances)
-			}
-		}
-		return h, nil
-
 	case "ctrl+g":
 		// Open Gemini model selection dialog (only for Gemini sessions)
 		if inst := h.getSelectedSession(); inst != nil && inst.Tool == "gemini" {
 			cmd := h.geminiModelDialog.Show(inst.ID, inst.GeminiModel)
 			return h, cmd
+		}
+		return h, nil
+
+	case "c":
+		// Open per-session color scheme picker for the selected session
+		if inst := h.getSelectedSession(); inst != nil {
+			h.colorSchemeDialog.SetSize(h.width, h.height)
+			h.colorSchemeDialog.Show(inst.ID, inst.ColorScheme)
 		}
 		return h, nil
 
@@ -4685,7 +4736,7 @@ func (h *Home) saveInstancesWithForce(force bool) {
 			// Without this, subsequent saves incorrectly detect the TUI's own previous
 			// save as an "external change" (currentMtime > stale lastLoadMtime) and abort.
 			// This caused session renames and other non-force saves to silently fail.
-			// See: https://github.com/asheshgoplani/agent-deck/issues/141
+			// See: https://github.com/millwright-software/agent-desk/issues/141
 			if newMtime, err := h.storage.GetFileMtime(); err == nil && !newMtime.IsZero() {
 				h.reloadMu.Lock()
 				h.lastLoadMtime = newMtime
@@ -4722,8 +4773,9 @@ func (h *Home) saveUIState() {
 	}
 
 	state := uiState{
-		PreviewMode:  int(h.previewMode),
-		StatusFilter: string(h.statusFilter),
+		PreviewMode:         int(h.previewMode),
+		StatusFilter:        string(h.statusFilter),
+		SidebarWidthPercent: h.sidebarWidthPercent,
 	}
 
 	// Capture cursor position
@@ -4775,6 +4827,11 @@ func (h *Home) loadUIState() {
 	// Apply preview mode and status filter immediately
 	h.previewMode = PreviewMode(state.PreviewMode)
 	h.statusFilter = session.Status(state.StatusFilter)
+
+	// Apply sidebar width if valid
+	if state.SidebarWidthPercent >= 15 && state.SidebarWidthPercent <= 50 {
+		h.sidebarWidthPercent = state.SidebarWidthPercent
+	}
 
 	// Defer cursor restoration until flatItems are populated
 	h.pendingCursorRestore = &state
@@ -5100,13 +5157,25 @@ func (h *Home) restartSession(inst *session.Instance) tea.Cmd {
 	mcpUILog.Debug("restart_session_called", slog.String("id", inst.ID), slog.String("title", inst.Title), slog.String("tool", inst.Tool))
 	return func() tea.Msg {
 		mcpUILog.Debug("restart_session_executing", slog.String("id", id))
-		err := inst.Restart()
+
+		// Resolve current instance by ID at execution time. During storage reloads,
+		// the pointer captured from the key event can be replaced before this cmd runs.
+		h.instancesMu.RLock()
+		current := h.instanceByID[id]
+		h.instancesMu.RUnlock()
+		if current == nil {
+			err := fmt.Errorf("session no longer exists")
+			mcpUILog.Debug("restart_session_result", slog.String("id", id), slog.Any("error", err))
+			return sessionRestartedMsg{sessionID: id, err: err}
+		}
+
+		err := current.Restart()
 		mcpUILog.Debug("restart_session_result", slog.String("id", id), slog.Any("error", err))
 		return sessionRestartedMsg{sessionID: id, err: err}
 	}
 }
 
-// attachSession attaches to a session using custom PTY with Ctrl+Q detection
+// attachSession attaches to a session using custom PTY with Shift+Tab detection
 func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	tmuxSess := inst.GetTmuxSession()
 	if tmuxSess == nil {
@@ -5118,12 +5187,22 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	// which were skipped during lazy loading for TUI startup performance
 	tmuxSess.EnsureConfigured()
 
+	// Ensure the attached status bar shows the user's title. On reconnect
+	// (after an agent-desk restart) DisplayName is reset to the generated tmux
+	// session name, so re-sync it from inst.Title here.
+	inst.SyncTmuxDisplayName()
+
 	// Sync session IDs to tmux environment for resume functionality
 	// (Deferred from load time for performance)
 	inst.SyncSessionIDsToTmux()
 
 	// Mark session as accessed (for recency-sorted path suggestions)
 	inst.MarkAccessed()
+
+	// Interacting with a session clears any manual u-key marker (unread/parked):
+	// opening it means you've dealt with it, so the overlay is now stale. The
+	// SaveWithGroups below persists the cleared flag.
+	inst.Flag = session.FlagNone
 
 	// Skip saving during reload to avoid overwriting external changes
 	// THREAD-SAFE: Read isReloading under mutex
@@ -5277,7 +5356,7 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, errored int) {
 }
 
 // renderFilterBar renders the quick filter pills
-// Format: [All] [● Running 2] [◐ Waiting 1] [○ Idle 5] [✕ Error 1]
+// Format: [All] [● Running 2] [● Waiting 1] [○ Idle 5] [✕ Error 1]
 func (h *Home) renderFilterBar() string {
 	running, waiting, idle, errored := h.countSessionStatuses()
 
@@ -5309,34 +5388,34 @@ func (h *Home) renderFilterBar() string {
 		pills = append(pills, inactivePillStyle.Render(allLabel))
 	}
 
-	// Running pill (green when active, dim if 0)
+	// Running pill (yellow = processing, dim if 0)
 	runningLabel := fmt.Sprintf("● %d", running)
 	if h.statusFilter == session.StatusRunning {
 		pills = append(pills, lipgloss.NewStyle().
 			Foreground(ColorBg).
-			Background(ColorGreen).
+			Background(ColorYellow).
 			Bold(true).
 			Padding(0, 1).Render(runningLabel))
 	} else if running > 0 {
 		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorGreen).
+			Foreground(ColorYellow).
 			Background(ColorSurface).
 			Padding(0, 1).Render(runningLabel))
 	} else {
 		pills = append(pills, dimPillStyle.Render(runningLabel))
 	}
 
-	// Waiting pill (yellow when active)
-	waitingLabel := fmt.Sprintf("◐ %d", waiting)
+	// Waiting pill (green = done, awaiting user)
+	waitingLabel := fmt.Sprintf("● %d", waiting)
 	if h.statusFilter == session.StatusWaiting {
 		pills = append(pills, lipgloss.NewStyle().
 			Foreground(ColorBg).
-			Background(ColorYellow).
+			Background(ColorGreen).
 			Bold(true).
 			Padding(0, 1).Render(waitingLabel))
 	} else if waiting > 0 {
 		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorYellow).
+			Foreground(ColorGreen).
 			Background(ColorSurface).
 			Padding(0, 1).Render(waitingLabel))
 	} else {
@@ -5396,7 +5475,9 @@ func (h *Home) updateSizes() {
 	h.groupDialog.SetSize(h.width, h.height)
 	h.confirmDialog.SetSize(h.width, h.height)
 	h.geminiModelDialog.SetSize(h.width, h.height)
+	h.colorSchemeDialog.SetSize(h.width, h.height)
 	h.worktreeFinishDialog.SetSize(h.width, h.height)
+	h.worktreeManager.SetSize(h.width, h.height)
 }
 
 // View renders the UI
@@ -5474,11 +5555,17 @@ func (h *Home) View() string {
 	if h.geminiModelDialog.IsVisible() {
 		return h.geminiModelDialog.View()
 	}
+	if h.colorSchemeDialog.IsVisible() {
+		return h.colorSchemeDialog.View()
+	}
 	if h.sessionPickerDialog.IsVisible() {
 		return h.sessionPickerDialog.View()
 	}
 	if h.worktreeFinishDialog.IsVisible() {
 		return h.worktreeFinishDialog.View()
+	}
+	if h.worktreeManager.IsVisible() {
+		return h.worktreeManager.View()
 	}
 
 	// Reuse viewBuilder to reduce allocations (reset and pre-allocate)
@@ -5486,83 +5573,7 @@ func (h *Home) View() string {
 	h.viewBuilder.Grow(32768) // Pre-allocate 32KB for typical view size
 	b := &h.viewBuilder
 
-	// ═══════════════════════════════════════════════════════════════════
-	// HEADER BAR
-	// ═══════════════════════════════════════════════════════════════════
-	// Calculate real session status counts for logo and stats
-	running, waiting, idle, errored := h.countSessionStatuses()
-	logo := RenderLogoCompact(running, waiting, idle)
-
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorAccent)
-
-	// Show profile in title if not default
-	titleText := "Agent Deck"
-	if h.profile != "" && h.profile != session.DefaultProfile {
-		profileStyle := lipgloss.NewStyle().
-			Foreground(ColorCyan).
-			Bold(true)
-		titleText = "Agent Deck " + profileStyle.Render("["+h.profile+"]")
-	}
-	title := titleStyle.Render(titleText)
-
-	// Status-based stats (more useful than group/session counts)
-	// Format: ● 2 running • ◐ 1 waiting • ○ 3 idle (• ✕ 1 error)
-	var statsParts []string
-	statsSep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" • ")
-
-	if running > 0 {
-		statsParts = append(statsParts, lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("● %d running", running)))
-	}
-	if waiting > 0 {
-		statsParts = append(statsParts, lipgloss.NewStyle().Foreground(ColorYellow).Render(fmt.Sprintf("◐ %d waiting", waiting)))
-	}
-	if idle > 0 {
-		statsParts = append(statsParts, lipgloss.NewStyle().Foreground(ColorText).Render(fmt.Sprintf("○ %d idle", idle)))
-	}
-	if errored > 0 {
-		statsParts = append(statsParts, lipgloss.NewStyle().Foreground(ColorRed).Render(fmt.Sprintf("✕ %d error", errored)))
-	}
-
-	// Fallback if no sessions
-	stats := ""
-	if len(statsParts) > 0 {
-		stats = strings.Join(statsParts, statsSep)
-	} else {
-		stats = lipgloss.NewStyle().Foreground(ColorText).Render("no sessions")
-	}
-
-	// Version badge (right-aligned, subtle inline style - no border to keep single line)
-	versionStyle := lipgloss.NewStyle().
-		Foreground(ColorComment).
-		Faint(true)
-	versionBadge := versionStyle.Render("v" + Version)
-
-	// Fill remaining header space
-	headerLeft := lipgloss.JoinHorizontal(lipgloss.Left, logo, "  ", title, "  ", stats)
-	headerPadding := h.width - lipgloss.Width(headerLeft) - lipgloss.Width(versionBadge) - 2
-	if headerPadding < 1 {
-		headerPadding = 1
-	}
-	headerContent := headerLeft + strings.Repeat(" ", headerPadding) + versionBadge
-
-	headerBar := lipgloss.NewStyle().
-		Background(ColorSurface).
-		MaxWidth(h.width).
-		Padding(0, 1).
-		Render(headerContent)
-
-	b.WriteString(headerBar)
-	b.WriteString("\n")
-
-	// ═══════════════════════════════════════════════════════════════════
-	// FILTER BAR (quick status filters)
-	// ═══════════════════════════════════════════════════════════════════
-	// Always show filter bar for consistent layout (prevents viewport jumping)
-	filterBarHeight := 1
-	b.WriteString(h.renderFilterBar())
-	b.WriteString("\n")
+	// Header and filter bar removed for cleaner UI — space reclaimed for content
 
 	// ═══════════════════════════════════════════════════════════════════
 	// UPDATE BANNER (if update available)
@@ -5576,7 +5587,7 @@ func (h *Home) View() string {
 			Bold(true).
 			MaxWidth(h.width).
 			Align(lipgloss.Center)
-		updateText := fmt.Sprintf(" ⬆ Update available: v%s → v%s (run: agent-deck update) ",
+		updateText := fmt.Sprintf(" ⬆ Update available: v%s → v%s (run: agent-desk update) ",
 			h.updateInfo.CurrentVersion, h.updateInfo.LatestVersion)
 		b.WriteString(updateStyle.Render(updateText))
 		b.WriteString("\n")
@@ -5602,8 +5613,8 @@ func (h *Home) View() string {
 	// MAIN CONTENT AREA - Responsive layout based on terminal width
 	// ═══════════════════════════════════════════════════════════════════
 	helpBarHeight := 2 // Help bar takes 2 lines (border + content)
-	// Height breakdown: -1 header, -filterBarHeight filter, -updateBannerHeight banner, -maintenanceBannerHeight maintenance, -helpBarHeight help
-	contentHeight := h.height - 1 - helpBarHeight - updateBannerHeight - maintenanceBannerHeight - filterBarHeight
+	// Height breakdown: -helpBarHeight help, -updateBannerHeight banner, -maintenanceBannerHeight maintenance
+	contentHeight := h.height - helpBarHeight - updateBannerHeight - maintenanceBannerHeight
 
 	// Route to appropriate layout based on terminal width
 	layoutMode := h.getLayoutMode()
@@ -5704,7 +5715,7 @@ func (h *Home) renderPanelTitle(title string, width int) string {
 func renderLoadingSplash(width, height int, frame int) string {
 	// Status indicator cycle: each status lights up in sequence
 	// Frame 0-1: Running (green ●)
-	// Frame 2-3: Waiting (yellow ◐)
+	// Frame 2-3: Waiting (orange ●)
 	// Frame 4-5: Idle (gray ○)
 	// Frame 6-7: All lit together
 
@@ -5712,7 +5723,7 @@ func renderLoadingSplash(width, height int, frame int) string {
 
 	// Active status colors (match the actual TUI colors)
 	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-	yellowStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
+	yellowStyle := lipgloss.NewStyle().Foreground(ColorOrange).Bold(true)
 	grayStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
 
 	// Dim style for inactive indicators
@@ -5731,26 +5742,26 @@ func renderLoadingSplash(width, height int, frame int) string {
 		switch phase {
 		case 0: // Running highlighted
 			running = greenStyle.Render("●")
-			waiting = dimStyle.Render("◐")
+			waiting = dimStyle.Render("●")
 			idle = dimStyle.Render("○")
 		case 1: // Waiting highlighted
 			running = dimStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
+			waiting = yellowStyle.Render("●")
 			idle = dimStyle.Render("○")
 		case 2: // Idle highlighted
 			running = dimStyle.Render("●")
-			waiting = dimStyle.Render("◐")
+			waiting = dimStyle.Render("●")
 			idle = grayStyle.Render("○")
 		case 3: // All lit
 			running = greenStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
+			waiting = yellowStyle.Render("●")
 			idle = grayStyle.Render("○")
 		}
 
 		content.WriteString("\n")
 		content.WriteString("      " + running + "   " + waiting + "   " + idle + "      \n")
 		content.WriteString("\n")
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
+		content.WriteString(titleStyle.Render("Agent Desk") + "\n")
 		content.WriteString("\n")
 		content.WriteString(subtitleStyle.Render("Loading sessions..."))
 	} else if width >= 25 && height >= 6 {
@@ -5758,21 +5769,21 @@ func renderLoadingSplash(width, height int, frame int) string {
 		var indicators string
 		switch phase {
 		case 0:
-			indicators = greenStyle.Render("●") + " " + dimStyle.Render("◐") + " " + dimStyle.Render("○")
+			indicators = greenStyle.Render("●") + " " + dimStyle.Render("●") + " " + dimStyle.Render("○")
 		case 1:
-			indicators = dimStyle.Render("●") + " " + yellowStyle.Render("◐") + " " + dimStyle.Render("○")
+			indicators = dimStyle.Render("●") + " " + yellowStyle.Render("●") + " " + dimStyle.Render("○")
 		case 2:
-			indicators = dimStyle.Render("●") + " " + dimStyle.Render("◐") + " " + grayStyle.Render("○")
+			indicators = dimStyle.Render("●") + " " + dimStyle.Render("●") + " " + grayStyle.Render("○")
 		case 3:
-			indicators = greenStyle.Render("●") + " " + yellowStyle.Render("◐") + " " + grayStyle.Render("○")
+			indicators = greenStyle.Render("●") + " " + yellowStyle.Render("●") + " " + grayStyle.Render("○")
 		}
 		content.WriteString(indicators + "\n")
 		content.WriteString("\n")
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
+		content.WriteString(titleStyle.Render("Agent Desk") + "\n")
 		content.WriteString(subtitleStyle.Render("Loading..."))
 	} else {
 		// Minimal
-		content.WriteString(greenStyle.Render("●") + " " + titleStyle.Render("Agent Deck") + "\n")
+		content.WriteString(greenStyle.Render("●") + " " + titleStyle.Render("Agent Desk") + "\n")
 		content.WriteString(subtitleStyle.Render("Loading..."))
 	}
 
@@ -5797,13 +5808,13 @@ func renderQuittingSplash(width, height int, frame int) string {
 
 	// Active status colors
 	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-	yellowStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
+	yellowStyle := lipgloss.NewStyle().Foreground(ColorOrange).Bold(true)
 	grayStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
 
 	// Text styles
 	titleStyle := lipgloss.NewStyle().Foreground(ColorText).Bold(true)
-	subtitleStyle := lipgloss.NewStyle().Foreground(ColorYellow)
+	subtitleStyle := lipgloss.NewStyle().Foreground(ColorOrange)
 
 	var content strings.Builder
 
@@ -5812,31 +5823,31 @@ func renderQuittingSplash(width, height int, frame int) string {
 		switch phase {
 		case 0:
 			running = greenStyle.Render("●")
-			waiting = dimStyle.Render("◐")
+			waiting = dimStyle.Render("●")
 			idle = dimStyle.Render("○")
 		case 1:
 			running = dimStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
+			waiting = yellowStyle.Render("●")
 			idle = dimStyle.Render("○")
 		case 2:
 			running = dimStyle.Render("●")
-			waiting = dimStyle.Render("◐")
+			waiting = dimStyle.Render("●")
 			idle = grayStyle.Render("○")
 		case 3:
 			running = greenStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
+			waiting = yellowStyle.Render("●")
 			idle = grayStyle.Render("○")
 		}
 
 		content.WriteString("\n")
 		content.WriteString("      " + running + "   " + waiting + "   " + idle + "      \n")
 		content.WriteString("\n")
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
+		content.WriteString(titleStyle.Render("Agent Desk") + "\n")
 		content.WriteString("\n")
 		content.WriteString(subtitleStyle.Render("Shutting down..."))
 	} else {
 		// Compact/Minimal
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
+		content.WriteString(titleStyle.Render("Agent Desk") + "\n")
 		content.WriteString(subtitleStyle.Render("Shutting down..."))
 	}
 
@@ -6006,14 +6017,19 @@ func ensureExactHeight(content string, n int) string {
 // ensureExactWidth ensures each line in content has exactly the specified visual width.
 // This is essential for proper horizontal panel alignment in lipgloss.JoinHorizontal.
 //
-// Behavior:
-//   - Strips ANSI codes to measure true visual width
-//   - Pads short lines with spaces to reach target width
-//   - Truncates long lines with "..." suffix
-//   - Preserves ANSI styling where possible
+// CRITICAL: Uses lipgloss.Width() for measurement to stay consistent with
+// lipgloss.JoinHorizontal's internal width calculation. Using a different
+// measurement (e.g. runewidth.StringWidth after custom ANSI stripping) can
+// disagree by even 1 character, causing JoinHorizontal to pad all lines to
+// the wider measurement. This makes the joined output exceed terminal width,
+// lines wrap, and Bubble Tea's renderer loses cursor tracking — producing
+// duplicated/stacked content (the "scrolling artifact" bug).
 //
-// This fixes the "bleeding" issue where right panel content appears in left panel
-// due to inconsistent line widths causing JoinHorizontal misalignment.
+// Behavior:
+//   - Measures width using lipgloss.Width (same as JoinHorizontal)
+//   - Pads short lines with spaces to reach target width
+//   - Truncates long lines using lipgloss.MaxWidth (preserves ANSI where possible)
+//   - Guarantees every line is exactly `width` visual characters
 func ensureExactWidth(content string, width int) string {
 	if width <= 0 {
 		return content
@@ -6023,23 +6039,19 @@ func ensureExactWidth(content string, width int) string {
 	result := make([]string, len(lines))
 
 	for i, line := range lines {
-		// Measure visual width (excluding ANSI codes)
-		cleanLine := tmux.StripANSI(line)
-		displayWidth := runewidth.StringWidth(cleanLine)
+		// Measure visual width using lipgloss (same measurement as JoinHorizontal)
+		displayWidth := lipgloss.Width(line)
 
 		if displayWidth == width {
-			// Already correct width
 			result[i] = line
 		} else if displayWidth < width {
 			// Pad with spaces to reach target width
-			padding := width - displayWidth
-			result[i] = line + strings.Repeat(" ", padding)
+			result[i] = line + strings.Repeat(" ", width-displayWidth)
 		} else {
-			// Line too wide - truncate the clean version
-			// Note: This loses ANSI styling but prevents layout corruption
-			truncated := runewidth.Truncate(cleanLine, width-3, "...")
-			// Pad if truncation made it shorter
-			truncWidth := runewidth.StringWidth(truncated)
+			// Line too wide — truncate using lipgloss for consistent ANSI handling
+			truncated := lipgloss.NewStyle().MaxWidth(width).Render(line)
+			// Verify and pad if truncation left it short
+			truncWidth := lipgloss.Width(truncated)
 			if truncWidth < width {
 				truncated += strings.Repeat(" ", width-truncWidth)
 			}
@@ -6054,28 +6066,22 @@ func ensureExactWidth(content string, width int) string {
 func (h *Home) renderDualColumnLayout(contentHeight int) string {
 	var b strings.Builder
 
-	// Calculate panel widths (35% left, 65% right for more preview space)
-	leftWidth := int(float64(h.width) * 0.35)
+	// Calculate panel widths (configurable left, rest for preview)
+	leftWidth := int(float64(h.width) * float64(h.sidebarWidthPercent) / 100.0)
 	rightWidth := h.width - leftWidth - 3 // -3 for separator
 
-	// Panel title is exactly 2 lines (title + underline)
-	// Panel content gets the remaining space: contentHeight - 2
-	panelTitleLines := 2
-	panelContentHeight := contentHeight - panelTitleLines
+	// Full content height for panels (no panel titles)
+	panelContentHeight := contentHeight
 
-	// Build left panel (session list) with styled title
-	leftTitle := h.renderPanelTitle("SESSIONS", leftWidth)
+	// Build left panel (session list)
 	leftContent := h.renderSessionList(leftWidth, panelContentHeight)
-	// CRITICAL: Ensure left content has exactly panelContentHeight lines
 	leftContent = ensureExactHeight(leftContent, panelContentHeight)
-	leftPanel := leftTitle + "\n" + leftContent
+	leftPanel := leftContent
 
-	// Build right panel (preview) with styled title
-	rightTitle := h.renderPanelTitle("PREVIEW", rightWidth)
+	// Build right panel (preview)
 	rightContent := h.renderPreviewPane(rightWidth, panelContentHeight)
-	// CRITICAL: Ensure right content has exactly panelContentHeight lines
 	rightContent = ensureExactHeight(rightContent, panelContentHeight)
-	rightPanel := rightTitle + "\n" + rightContent
+	rightPanel := rightContent
 
 	// Build separator - must be exactly contentHeight lines
 	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
@@ -6094,11 +6100,67 @@ func (h *Home) renderDualColumnLayout(contentHeight int) string {
 	leftPanel = ensureExactWidth(leftPanel, leftWidth)
 	rightPanel = ensureExactWidth(rightPanel, rightWidth)
 
+	// Paint the preview pane in the selected session's color scheme so its color
+	// is visible before attaching (mirrors the colored tmux window background).
+	rightPanel = h.tintPreviewForSelection(rightPanel)
+
 	// Join panels horizontally - all components have exact heights AND widths now
 	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, separator, rightPanel)
+
+	// Safety net: enforce per-line MaxWidth on the joined output.
+	// Even with ensureExactWidth, JoinHorizontal can produce lines wider than
+	// h.width due to separator ANSI codes or rounding. Any line that wraps in the
+	// terminal adds a visual line, which shifts Bubble Tea's cursor tracking and
+	// causes duplicated/stacked content on scroll.
+	mainContent = lipgloss.NewStyle().MaxWidth(h.width).Render(mainContent)
+
 	b.WriteString(mainContent)
 
 	return b.String()
+}
+
+// tintPreviewForSelection paints a rendered preview block in the selected
+// session's color scheme (background + foreground), so the session's color shows
+// in the preview pane before you attach — mirroring the colored tmux window.
+// No-op for groups, default-scheme sessions, or when terminal colors are off.
+// The block should already be padded to full width so the background fills the pane.
+func (h *Home) tintPreviewForSelection(block string) string {
+	if h.cursor >= len(h.flatItems) {
+		return block
+	}
+	item := h.flatItems[h.cursor]
+	if item.Type != session.ItemTypeSession || item.Session == nil {
+		return block
+	}
+	cs := session.ColorSchemeByName(item.Session.ColorScheme)
+	if cs.IsDefault() {
+		return block
+	}
+	return tintBlockBackground(block, lipgloss.Color(cs.Bg), lipgloss.Color(cs.Fg))
+}
+
+// tintBlockBackground fills every line of a (possibly already ANSI-styled) block
+// with the given background + foreground. It re-applies the style after each
+// inner reset so the background does not bleed out where nested styles reset,
+// which would otherwise leave the right portion of each line uncolored.
+func tintBlockBackground(block string, bg, fg lipgloss.Color) string {
+	// Extract the raw open/close SGR sequences for this bg+fg (profile-aware) by
+	// rendering a NUL sentinel and splitting around it.
+	probe := lipgloss.NewStyle().Background(bg).Foreground(fg).Render("\x00")
+	idx := strings.IndexByte(probe, 0)
+	if idx <= 0 {
+		return block // color profile produced no styling (e.g. ascii/none)
+	}
+	open := probe[:idx]
+	closeSeq := probe[idx+1:] // typically "\x1b[0m"
+
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		// Re-open our style after every reset emitted by nested spans.
+		line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+open)
+		lines[i] = open + line + closeSeq
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderStackedLayout renders list above preview for medium terminals (50-79 cols)
@@ -6117,11 +6179,8 @@ func (h *Home) renderStackedLayout(totalHeight int) string {
 	}
 
 	// Session list (full width)
-	listTitle := h.renderPanelTitle("SESSIONS", h.width)
-	listContent := h.renderSessionList(h.width, listHeight-2) // -2 for title
-	listContent = ensureExactHeight(listContent, listHeight-2)
-	b.WriteString(listTitle)
-	b.WriteString("\n")
+	listContent := h.renderSessionList(h.width, listHeight)
+	listContent = ensureExactHeight(listContent, listHeight)
 	b.WriteString(listContent)
 	b.WriteString("\n")
 
@@ -6131,11 +6190,10 @@ func (h *Home) renderStackedLayout(totalHeight int) string {
 	b.WriteString("\n")
 
 	// Preview (full width)
-	previewTitle := h.renderPanelTitle("PREVIEW", h.width)
-	previewContent := h.renderPreviewPane(h.width, previewHeight-2) // -2 for title
-	previewContent = ensureExactHeight(previewContent, previewHeight-2)
-	b.WriteString(previewTitle)
-	b.WriteString("\n")
+	previewContent := h.renderPreviewPane(h.width, previewHeight)
+	previewContent = ensureExactHeight(previewContent, previewHeight)
+	previewContent = ensureExactWidth(previewContent, h.width)
+	previewContent = h.tintPreviewForSelection(previewContent)
 	b.WriteString(previewContent)
 
 	return b.String()
@@ -6145,15 +6203,8 @@ func (h *Home) renderStackedLayout(totalHeight int) string {
 func (h *Home) renderSingleColumnLayout(totalHeight int) string {
 	var b strings.Builder
 
-	// Full height for list
-	listHeight := totalHeight - 2 // -2 for title
-
-	listTitle := h.renderPanelTitle("SESSIONS", h.width)
-	listContent := h.renderSessionList(h.width, listHeight)
-	listContent = ensureExactHeight(listContent, listHeight)
-
-	b.WriteString(listTitle)
-	b.WriteString("\n")
+	listContent := h.renderSessionList(h.width, totalHeight)
+	listContent = ensureExactHeight(listContent, totalHeight)
 	b.WriteString(listContent)
 
 	return b.String()
@@ -6205,7 +6256,7 @@ func renderToolStatusLine(b *strings.Builder, sessionID string, detectedAt time.
 	} else if threeState && detectedAt.IsZero() {
 		statusStyle := lipgloss.NewStyle().Foreground(ColorYellow)
 		b.WriteString(labelStyle.Render("Status:  "))
-		b.WriteString(statusStyle.Render("◐ Detecting session..."))
+		b.WriteString(statusStyle.Render("● Detecting session..."))
 		b.WriteString("\n")
 	} else {
 		statusStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -6228,97 +6279,6 @@ func renderDetectedAtLine(b *strings.Builder, detectedAt time.Time) {
 	dimStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
 	b.WriteString(labelStyle.Render("Detected:"))
 	b.WriteString(dimStyle.Render(" " + formatRelativeTime(detectedAt)))
-	b.WriteString("\n")
-}
-
-// renderForkHintLine renders the fork keyboard hint line.
-func renderForkHintLine(b *strings.Builder) {
-	hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-	keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	b.WriteString(hintStyle.Render("Fork:    "))
-	b.WriteString(keyStyle.Render("f"))
-	b.WriteString(hintStyle.Render(" quick fork, "))
-	b.WriteString(keyStyle.Render("F"))
-	b.WriteString(hintStyle.Render(" fork with options"))
-	b.WriteString("\n")
-}
-
-// renderSimpleMCPLine renders MCPs without sync status (for Gemini and other tools).
-// Width-aware truncation shows "(+N more)" when MCPs don't fit.
-func renderSimpleMCPLine(b *strings.Builder, mcpInfo *session.MCPInfo, width int) {
-	if mcpInfo == nil || !mcpInfo.HasAny() {
-		return
-	}
-
-	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-	valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-	var mcpParts []string
-	for _, name := range mcpInfo.Global {
-		mcpParts = append(mcpParts, valueStyle.Render(name+" (g)"))
-	}
-	for _, name := range mcpInfo.Project {
-		mcpParts = append(mcpParts, valueStyle.Render(name+" (p)"))
-	}
-	for _, mcp := range mcpInfo.LocalMCPs {
-		mcpParts = append(mcpParts, valueStyle.Render(mcp.Name+" (l)"))
-	}
-
-	if len(mcpParts) == 0 {
-		return
-	}
-
-	b.WriteString(labelStyle.Render("MCPs:    "))
-
-	mcpMaxWidth := width - 4 - 9
-	if mcpMaxWidth < 20 {
-		mcpMaxWidth = 20
-	}
-
-	var mcpResult strings.Builder
-	mcpCount := 0
-	currentWidth := 0
-
-	for i, part := range mcpParts {
-		plainPart := tmux.StripANSI(part)
-		partWidth := runewidth.StringWidth(plainPart)
-
-		addedWidth := partWidth
-		if mcpCount > 0 {
-			addedWidth += 2
-		}
-
-		remaining := len(mcpParts) - i
-		isLast := remaining == 1
-
-		var wouldExceed bool
-		if isLast {
-			wouldExceed = currentWidth+addedWidth > mcpMaxWidth
-		} else {
-			moreIndicator := fmt.Sprintf(" (+%d more)", remaining)
-			moreWidth := runewidth.StringWidth(moreIndicator)
-			wouldExceed = currentWidth+addedWidth+moreWidth > mcpMaxWidth
-		}
-
-		if wouldExceed {
-			moreStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-			if mcpCount > 0 {
-				mcpResult.WriteString(moreStyle.Render(fmt.Sprintf(" (+%d more)", remaining)))
-			} else {
-				mcpResult.WriteString(moreStyle.Render(fmt.Sprintf("(%d MCPs)", len(mcpParts))))
-			}
-			break
-		}
-
-		if mcpCount > 0 {
-			mcpResult.WriteString(", ")
-		}
-		mcpResult.WriteString(part)
-		currentWidth += addedWidth
-		mcpCount++
-	}
-
-	b.WriteString(mcpResult.String())
 	b.WriteString("\n")
 }
 
@@ -6378,9 +6338,6 @@ func (h *Home) renderHelpBarMinimal() string {
 			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("g")
 		} else {
 			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("R")
-			if item.Session != nil && item.Session.CanFork() {
-				contextKeys += " " + keyStyle.Render("f")
-			}
 			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
 				contextKeys += " " + keyStyle.Render("M")
 			}
@@ -6436,15 +6393,10 @@ func (h *Home) renderHelpBarCompact() string {
 				h.helpKeyShort("n/N", "New"),
 				h.helpKeyShort("R", "Restart"),
 			}
-			if item.Session != nil && item.Session.CanFork() {
-				contextHints = append(contextHints, h.helpKeyShort("f", "Fork"))
-			}
 			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
 				contextHints = append(contextHints, h.helpKeyShort("M", "MCP"))
 				contextHints = append(contextHints, h.helpKeyShort("v", h.previewModeShort()))
 			}
-			contextHints = append(contextHints, h.helpKeyShort("c", "Copy"))
-			contextHints = append(contextHints, h.helpKeyShort("x", "Send"))
 		}
 	}
 
@@ -6536,21 +6488,16 @@ func (h *Home) renderHelpBarFull() string {
 				h.helpKey("g", "Group"),
 				h.helpKey("R", "Restart"),
 			}
-			// Only show fork hints if session has a valid Claude session ID
-			if item.Session != nil && item.Session.CanFork() {
-				primaryHints = append(primaryHints, h.helpKey("f/F", "Fork"))
-			}
 			// Show MCP Manager and preview mode toggle for Claude and Gemini sessions
 			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
 				primaryHints = append(primaryHints, h.helpKey("M", "MCP"))
 				primaryHints = append(primaryHints, h.helpKey("v", h.previewModeShort()))
 			}
-			primaryHints = append(primaryHints, h.helpKey("c", "Copy"))
-			primaryHints = append(primaryHints, h.helpKey("x", "Send"))
 			secondaryHints = []string{
 				h.helpKey("r", "Rename"),
 				h.helpKey("m", "Move"),
 				h.helpKey("d", "Delete"),
+				h.helpKey("u", "Unread/Park"),
 			}
 		}
 	}
@@ -6743,33 +6690,8 @@ func (h *Home) renderGroupItem(b *strings.Builder, item session.Item, selected b
 	sessionCount := h.groupTree.SessionCountForGroup(group.Path)
 	countStr := countStyle.Render(fmt.Sprintf(" (%d)", sessionCount))
 
-	// Status indicators (compact, on same line) using cached styles
-	// Also count recursively for subgroups
-	running := 0
-	waiting := 0
-	for path, g := range h.groupTree.Groups {
-		if path == group.Path || strings.HasPrefix(path, group.Path+"/") {
-			for _, sess := range g.Sessions {
-				switch sess.Status {
-				case session.StatusRunning:
-					running++
-				case session.StatusWaiting:
-					waiting++
-				}
-			}
-		}
-	}
-
-	statusStr := ""
-	if running > 0 {
-		statusStr += " " + GroupStatusRunning.Render(fmt.Sprintf("● %d", running))
-	}
-	if waiting > 0 {
-		statusStr += " " + GroupStatusWaiting.Render(fmt.Sprintf("◐ %d", waiting))
-	}
-
-	// Build the row: [indent][hotkey][expand] [name](count) [status]
-	row := fmt.Sprintf("%s%s%s %s%s%s", indent, hotkeyStr, expandIcon, nameStyle.Render(group.Name), countStr, statusStr)
+	// Build the row: [indent][hotkey][expand] [name](count)
+	row := fmt.Sprintf("%s%s%s %s%s", indent, hotkeyStr, expandIcon, nameStyle.Render(group.Name), countStr)
 	b.WriteString(row)
 	b.WriteString("\n")
 }
@@ -6790,9 +6712,8 @@ const (
 func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected bool) {
 	inst := item.Session
 
-	// Snapshot status and tool under read lock to avoid races with background worker
+	// Snapshot status under read lock to avoid races with background worker
 	instStatus := inst.GetStatusThreadSafe()
-	instTool := inst.GetToolThreadSafe()
 
 	// Tree style for connectors - Use ColorText for clear visibility of box-drawing characters
 	treeStyle := TreeConnectorStyle
@@ -6839,7 +6760,7 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		statusIcon = "●"
 		statusStyle = SessionStatusRunning
 	case session.StatusWaiting:
-		statusIcon = "◐"
+		statusIcon = "●"
 		statusStyle = SessionStatusWaiting
 	case session.StatusIdle:
 		statusIcon = "○"
@@ -6851,8 +6772,6 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		statusIcon = "○"
 		statusStyle = SessionStatusIdle
 	}
-
-	status := statusStyle.Render(statusIcon)
 
 	// Title styling - add bold/underline for accessibility (colorblind users)
 	var titleStyle lipgloss.Style
@@ -6867,18 +6786,31 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		titleStyle = SessionTitleDefault
 	}
 
-	// Tool badge with brand-specific color
-	// Claude=orange, Gemini=purple, Codex=cyan, Aider=red
-	toolStyle := GetToolStyle(instTool)
+	// Manual marker override from the u-key cycle. Paints the dot regardless of
+	// the underlying status; parked states also dim the title so they recede.
+	switch inst.Flag {
+	case session.FlagUnread:
+		// "Come back to this" bookmark: bright green dot, title left normal
+		statusIcon = "●"
+		statusStyle = SessionStatusUnread
+	case session.FlagParkedRed:
+		statusIcon = "●"
+		statusStyle = SessionStatusParked
+		titleStyle = SessionTitleParked
+	case session.FlagParkedBlue:
+		statusIcon = "●"
+		statusStyle = SessionStatusParkedBlue
+		titleStyle = SessionTitleParked
+	}
 
-	// Selection indicator
+	// Selection indicator. We deliberately do NOT restyle the status dot here:
+	// keeping its semantic color makes the highlighted row's state readable
+	// (it was previously washed out to the selection colors, hiding parked/
+	// unread/waiting exactly on the row you're looking at).
 	selectionPrefix := " "
 	if selected {
 		selectionPrefix = SessionSelectionPrefix.Render("▶")
 		titleStyle = SessionTitleSelStyle
-		toolStyle = SessionStatusSelStyle
-		statusStyle = SessionStatusSelStyle
-		status = statusStyle.Render(statusIcon)
 		// Tree connector also gets selection styling
 		treeStyle = TreeConnectorSelStyle
 		// Rebuild baseIndent with selection styling for sub-sessions
@@ -6888,18 +6820,8 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		}
 	}
 
+	status := statusStyle.Render(statusIcon)
 	title := titleStyle.Render(inst.Title)
-	tool := toolStyle.Render(" " + instTool)
-
-	// YOLO badge for Gemini sessions with YOLO mode enabled
-	yoloBadge := ""
-	if instTool == "gemini" && inst.GeminiYoloMode != nil && *inst.GeminiYoloMode {
-		yoloStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
-		if selected {
-			yoloStyle = SessionStatusSelStyle
-		}
-		yoloBadge = yoloStyle.Render(" [YOLO]")
-	}
 
 	// Worktree branch badge for sessions running in git worktrees
 	worktreeBadge := ""
@@ -6915,10 +6837,48 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		worktreeBadge = wtStyle.Render(" [" + branch + "]")
 	}
 
-	// Build row: [baseIndent][selection][tree][status] [title] [tool] [yolo] [worktree]
-	// Format: " ├─ ● session-name tool" or "▶└─ ● session-name tool"
-	// Sub-sessions get extra indent: "   ├─◐ sub-session tool"
-	row := fmt.Sprintf("%s%s%s %s %s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, title, tool, yoloBadge, worktreeBadge)
+	// Per-session color swatch (only shown for non-default schemes, so default
+	// rows keep their exact alignment).
+	colorSwatch := ""
+	if cs := session.ColorSchemeByName(inst.ColorScheme); !cs.IsDefault() {
+		colorSwatch = lipgloss.NewStyle().Foreground(lipgloss.Color(cs.Accent)).Render("▍") + " "
+	}
+
+	// Staleness badge: how long since the session last showed activity.
+	// Gives a quick read on which sessions have gone stale.
+	staleness := ""
+	if lastActive := inst.GetLastActivityTime(); !lastActive.IsZero() {
+		stStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+		if selected {
+			stStyle = SessionStatusSelStyle
+		}
+		staleness = stStyle.Render(" (" + formatCompactDuration(lastActive) + ")")
+	}
+
+	// Model + mode badge: abbreviated model name, ⚡ when launched in an
+	// auto-approve mode (skip-permissions / yolo)
+	modelBadge := ""
+	{
+		name := inst.ModelShortName()
+		auto := inst.IsAutoMode()
+		if name != "" || auto {
+			mdStyle := lipgloss.NewStyle().Foreground(ColorPurple)
+			autoStyle := lipgloss.NewStyle().Foreground(ColorYellow)
+			if selected {
+				mdStyle = SessionStatusSelStyle
+				autoStyle = SessionStatusSelStyle
+			}
+			if name != "" {
+				modelBadge = mdStyle.Render(" " + name)
+			}
+			if auto {
+				modelBadge += autoStyle.Render("⚡")
+			}
+		}
+	}
+
+	// Build row: [baseIndent][selection][tree][status] [swatch][title] [worktree][model][staleness]
+	row := fmt.Sprintf("%s%s%s %s %s%s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, colorSwatch, title, worktreeBadge, modelBadge, staleness)
 	b.WriteString(row)
 	b.WriteString("\n")
 }
@@ -7179,9 +7139,9 @@ func (h *Home) renderSessionInfoCard(inst *session.Instance, width, height int) 
 	var statusColor lipgloss.Color
 	switch cardStatus {
 	case session.StatusRunning:
-		statusColor = ColorGreen
+		statusColor = ColorYellow // processing
 	case session.StatusWaiting:
-		statusColor = ColorYellow
+		statusColor = ColorGreen // done, awaiting user
 	case session.StatusError:
 		statusColor = ColorRed
 	default:
@@ -7250,57 +7210,13 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// Session preview
 	selected := item.Session
 
-	// Session info header box
-	statusIcon := "○"
-	statusColor := ColorTextDim
-	switch selected.Status {
-	case session.StatusRunning:
-		statusIcon = "●"
-		statusColor = ColorGreen
-	case session.StatusWaiting:
-		statusIcon = "◐"
-		statusColor = ColorYellow
-	case session.StatusError:
-		statusIcon = "✕"
-		statusColor = ColorRed
-	}
-
-	// Header with session name and status
-	statusBadge := lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon + " " + string(selected.Status))
-	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
-	b.WriteString(nameStyle.Render(selected.Title))
-	b.WriteString("  ")
-	b.WriteString(statusBadge)
-	b.WriteString("\n")
-
-	// Info lines: path and activity time
+	// Project path — the one bit of top metadata not shown in the nav row
+	// (the row carries name/status/model/staleness). Name, status word,
+	// activity time, tool/group badges and the context note were all cut as
+	// redundant with the row.
 	infoStyle := lipgloss.NewStyle().Foreground(ColorText)
 	pathStr := truncatePath(selected.ProjectPath, width-4)
 	b.WriteString(infoStyle.Render("📁 " + pathStr))
-	b.WriteString("\n")
-
-	// Activity time - shows when session was last active
-	activityTime := selected.GetLastActivityTime()
-	activityStr := formatRelativeTime(activityTime)
-	if selected.Status == session.StatusRunning {
-		activityStr = "active now"
-	}
-	b.WriteString(infoStyle.Render("⏱ " + activityStr))
-	b.WriteString("\n")
-
-	toolBadge := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorPurple).
-		Padding(0, 1).
-		Render(selected.Tool)
-	groupBadge := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorCyan).
-		Padding(0, 1).
-		Render(selected.GroupPath)
-	b.WriteString(toolBadge)
-	b.WriteString(" ")
-	b.WriteString(groupBadge)
 	b.WriteString("\n")
 
 	// Worktree info section (for sessions running in git worktrees)
@@ -7393,158 +7309,6 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			b.WriteString("\n")
 		}
 
-		// MCP servers - compact format with source indicators and sync status
-		mcpInfo := selected.GetMCPInfo()
-		hasLoadedMCPs := len(selected.LoadedMCPNames) > 0
-		hasMCPs := mcpInfo != nil && mcpInfo.HasAny()
-
-		if hasMCPs || hasLoadedMCPs {
-			b.WriteString(labelStyle.Render("MCPs:    "))
-
-			// Build set of loaded MCPs for comparison
-			loadedSet := make(map[string]bool)
-			for _, name := range selected.LoadedMCPNames {
-				loadedSet[name] = true
-			}
-
-			// Build set of current MCPs (from config)
-			currentSet := make(map[string]bool)
-			if mcpInfo != nil {
-				for _, name := range mcpInfo.Global {
-					currentSet[name] = true
-				}
-				for _, name := range mcpInfo.Project {
-					currentSet[name] = true
-				}
-				for _, mcp := range mcpInfo.LocalMCPs {
-					currentSet[mcp.Name] = true
-				}
-			}
-
-			// Styles for different MCP states
-			pendingStyle := lipgloss.NewStyle().Foreground(ColorYellow)
-			staleStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-			var mcpParts []string
-
-			// Helper to add MCP with appropriate styling
-			addMCP := func(name, source string) {
-				label := name + " (" + source + ")"
-				if !hasLoadedMCPs {
-					// Old session without LoadedMCPNames - show all as normal (no sync info)
-					mcpParts = append(mcpParts, valueStyle.Render(label))
-				} else if loadedSet[name] {
-					// In both loaded and current - active (normal style)
-					mcpParts = append(mcpParts, valueStyle.Render(label))
-				} else {
-					// In current but not loaded - pending (needs restart)
-					mcpParts = append(mcpParts, pendingStyle.Render(label+" ⟳"))
-				}
-			}
-
-			// Add MCPs from current config with source indicators
-			if mcpInfo != nil {
-				for _, name := range mcpInfo.Global {
-					addMCP(name, "g")
-				}
-				for _, name := range mcpInfo.Project {
-					addMCP(name, "p")
-				}
-				for _, mcp := range mcpInfo.LocalMCPs {
-					// Show source path if different from project path
-					sourceIndicator := "l"
-					if mcp.SourcePath != selected.ProjectPath {
-						// Show abbreviated path (just directory name)
-						sourceIndicator = "l:" + filepath.Base(mcp.SourcePath)
-					}
-					addMCP(mcp.Name, sourceIndicator)
-				}
-			}
-
-			// Add stale MCPs (loaded but no longer in config)
-			if hasLoadedMCPs {
-				for _, name := range selected.LoadedMCPNames {
-					if !currentSet[name] {
-						// Still running but removed from config
-						mcpParts = append(mcpParts, staleStyle.Render(name+" ✕"))
-					}
-				}
-			}
-
-			// Calculate available width for MCPs (width - 4 for panel padding - 9 for "MCPs:    " label)
-			mcpMaxWidth := width - 4 - 9
-			if mcpMaxWidth < 20 {
-				mcpMaxWidth = 20 // Minimum sensible width
-			}
-
-			// Build MCPs progressively to fit within available width
-			var mcpResult strings.Builder
-			mcpCount := 0
-			currentWidth := 0
-
-			for i, part := range mcpParts {
-				// Strip ANSI codes to measure actual display width
-				plainPart := tmux.StripANSI(part)
-				partWidth := runewidth.StringWidth(plainPart)
-
-				// Calculate width including separator if not first
-				addedWidth := partWidth
-				if mcpCount > 0 {
-					addedWidth += 2 // ", " separator
-				}
-
-				remaining := len(mcpParts) - i
-				isLast := remaining == 1
-
-				// For non-last MCPs: reserve space for "+N more" indicator
-				// For last MCP: just check if it fits without indicator
-				var wouldExceed bool
-				if isLast {
-					// Last MCP - just check if it fits
-					wouldExceed = currentWidth+addedWidth > mcpMaxWidth
-				} else {
-					// Not last - check with indicator space reserved
-					moreIndicator := fmt.Sprintf(" (+%d more)", remaining)
-					moreWidth := runewidth.StringWidth(moreIndicator)
-					wouldExceed = currentWidth+addedWidth+moreWidth > mcpMaxWidth
-				}
-
-				if wouldExceed {
-					// Would exceed - show indicator for remaining
-					moreStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-					if mcpCount > 0 {
-						mcpResult.WriteString(moreStyle.Render(fmt.Sprintf(" (+%d more)", remaining)))
-					} else {
-						// No MCPs fit - just show count
-						mcpResult.WriteString(moreStyle.Render(fmt.Sprintf("(%d MCPs)", len(mcpParts))))
-					}
-					break
-				}
-
-				// Add separator if not first
-				if mcpCount > 0 {
-					mcpResult.WriteString(", ")
-				}
-				mcpResult.WriteString(part)
-				currentWidth += addedWidth
-				mcpCount++
-			}
-
-			b.WriteString(mcpResult.String())
-			b.WriteString("\n")
-		}
-
-		// Fork hint when session can be forked
-		if selected.CanFork() {
-			hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-			keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-			b.WriteString(hintStyle.Render("Fork:    "))
-			b.WriteString(keyStyle.Render("f"))
-			b.WriteString(hintStyle.Render(" quick fork, "))
-			b.WriteString(keyStyle.Render("F"))
-			b.WriteString(hintStyle.Render(" fork with options"))
-			b.WriteString("\n")
-		}
 	}
 
 	// Gemini-specific info (session ID)
@@ -7575,10 +7339,6 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			b.WriteString(labelStyle.Render("Model:   "))
 			b.WriteString(accentStyle.Render(modelDisplay))
 			b.WriteString("\n")
-
-			// MCPs for Gemini (global only)
-			mcpInfo := selected.GetMCPInfo()
-			renderSimpleMCPLine(&b, mcpInfo, width)
 		} else {
 			statusStyle := lipgloss.NewStyle().Foreground(ColorText)
 			b.WriteString(labelStyle.Render("Status:  "))
@@ -7617,18 +7377,13 @@ func (h *Home) renderPreviewPane(width, height int) string {
 				b.WriteString(dimStyle.Render(" " + detectedAgo))
 				b.WriteString("\n")
 			}
-
-			// Fork hint for OpenCode
-			if selected.CanFork() {
-				renderForkHintLine(&b)
-			}
 		} else {
 			// Check if detection has completed (OpenCodeDetectedAt is set even when no session found)
 			if selected.OpenCodeDetectedAt.IsZero() {
 				// Detection not yet completed - show detecting state
 				statusStyle := lipgloss.NewStyle().Foreground(ColorYellow)
 				b.WriteString(labelStyle.Render("Status:  "))
-				b.WriteString(statusStyle.Render("◐ Detecting session..."))
+				b.WriteString(statusStyle.Render("● Detecting session..."))
 				b.WriteString("\n")
 			} else {
 				// Detection completed but no session found
@@ -7680,16 +7435,6 @@ func (h *Home) renderPreviewPane(width, height int) string {
 				statusStyle := lipgloss.NewStyle().Foreground(ColorText)
 				b.WriteString(labelStyle.Render("Status:  "))
 				b.WriteString(statusStyle.Render("○ Not connected"))
-				b.WriteString("\n")
-			}
-
-			// Resume hint when tool supports restart with session resume
-			if selected.CanRestartGeneric() {
-				hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-				keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-				b.WriteString(hintStyle.Render("Resume:  "))
-				b.WriteString(keyStyle.Render("r"))
-				b.WriteString(hintStyle.Render(" restart with session resume"))
 				b.WriteString("\n")
 			}
 		}
@@ -7753,18 +7498,12 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Check preview settings for what to show
 	config, _ := session.LoadUserConfig()
-	showAnalytics := config != nil && config.GetShowAnalytics() && (selected.Tool == "claude" || selected.Tool == "gemini")
+	// Analytics were cut from the preview; live output is the only content mode
+	// now, so every preview mode just shows output.
+	showAnalytics := false
 	showOutput := config == nil || config.GetShowOutput() // Default to true if config fails
-
-	// Apply preview mode override (v key cycles through modes)
-	switch h.previewMode {
-	case PreviewModeOutput:
-		showAnalytics = false
+	if h.previewMode == PreviewModeOutput {
 		showOutput = true
-	case PreviewModeAnalytics:
-		// showAnalytics keeps its default value (only available for Claude/Gemini)
-		showOutput = false
-		// PreviewModeBoth: use config settings (default)
 	}
 
 	// Check if session is launching/resuming (for animation priority)
@@ -7772,32 +7511,6 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	_, isSessionResuming := h.resumingSessions[selected.ID]
 	_, isSessionForking := h.forkingSessions[selected.ID]
 	isStartingUp := isSessionLaunching || isSessionResuming || isSessionForking
-
-	// Analytics panel (for Claude/Gemini sessions with analytics enabled)
-	// Skip showing "Loading analytics..." during startup - let the launch animation take focus
-	if showAnalytics && !isStartingUp {
-		analyticsHeader := renderSectionDivider("Analytics", width-4)
-		b.WriteString(analyticsHeader)
-		b.WriteString("\n")
-
-		// Check if we have analytics for this session
-		if h.analyticsSessionID == selected.ID && (h.currentAnalytics != nil || h.currentGeminiAnalytics != nil) {
-			// Pass display settings from config
-			if config != nil {
-				h.analyticsPanel.SetDisplaySettings(config.Preview.GetAnalyticsSettings())
-			}
-			h.analyticsPanel.SetSize(width-4, height/2)
-			b.WriteString(h.analyticsPanel.View())
-			b.WriteString("\n")
-		} else {
-			// Analytics not yet loaded
-			loadingStyle := lipgloss.NewStyle().
-				Foreground(ColorText).
-				Italic(true)
-			b.WriteString(loadingStyle.Render("Loading analytics..."))
-			b.WriteString("\n\n")
-		}
-	}
 
 	// If output is disabled AND not starting up, return early
 	// (We want to show the launch animation even if output is normally disabled)
@@ -8008,6 +7721,12 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			// Strip ANSI codes for accurate width measurement
 			cleanLine := tmux.StripANSI(line)
 
+			// Strip control characters (\r, \b, etc.) that can corrupt terminal
+			// rendering. tmux capture-pane output may contain carriage returns
+			// which, inside JoinHorizontal, move the cursor to column 0 and
+			// overwrite the left panel content on that line.
+			cleanLine = stripControlChars(cleanLine)
+
 			// Handle empty lines - preserve some for readability
 			trimmed := strings.TrimSpace(cleanLine)
 			if trimmed == "" {
@@ -8058,6 +7777,19 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	return strings.Join(truncatedLines, "\n")
 }
 
+// stripControlChars removes C0 control characters (except \n and \t) from a string.
+// tmux capture-pane output may include \r, \b, and other control characters that
+// corrupt terminal rendering when embedded inside styled TUI output (e.g. \r moves
+// the cursor to column 0, overwriting the left panel in a JoinHorizontal layout).
+func stripControlChars(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\n' && r != '\t' {
+			return -1 // Drop the character
+		}
+		return r
+	}, s)
+}
+
 // truncatePath shortens a path to fit within maxLen display width
 func truncatePath(path string, maxLen int) string {
 	pathWidth := runewidth.StringWidth(path)
@@ -8081,6 +7813,41 @@ func truncatePath(path string, maxLen int) string {
 
 // formatRelativeTime formats a time as a human-readable relative string
 // Examples: "just now", "2m ago", "1h ago", "3h ago", "1d ago"
+// formatCompactDuration renders elapsed time since t as a terse badge string
+// for the session list (e.g. "45s", "7m", "2h14m", "3d4h"). Zero time -> "?".
+func formatCompactDuration(t time.Time) string {
+	if t.IsZero() {
+		return "?"
+	}
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Hour:
+		// Minute granularity; anything under a minute reads as 1m (no seconds).
+		m := int(d.Minutes())
+		if m < 1 {
+			m = 1
+		}
+		return fmt.Sprintf("%dm", m)
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) - h*60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	default:
+		days := int(d.Hours()) / 24
+		h := int(d.Hours()) - days*24
+		if h == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, h)
+	}
+}
+
 func formatRelativeTime(t time.Time) string {
 	if t.IsZero() {
 		return "unknown"
@@ -8148,10 +7915,10 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 	// Compact status line (inline, not badges)
 	var statuses []string
 	if running > 0 {
-		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("● %d running", running)))
+		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorYellow).Render(fmt.Sprintf("● %d running", running)))
 	}
 	if waiting > 0 {
-		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorYellow).Render(fmt.Sprintf("◐ %d waiting", waiting)))
+		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("● %d waiting", waiting)))
 	}
 	if idle > 0 {
 		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorText).Render(fmt.Sprintf("○ %d idle", idle)))
@@ -8227,7 +7994,7 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 			case session.StatusRunning:
 				statusIcon, statusColor = "●", ColorGreen
 			case session.StatusWaiting:
-				statusIcon, statusColor = "◐", ColorYellow
+				statusIcon, statusColor = "●", ColorOrange
 			case session.StatusError:
 				statusIcon, statusColor = "✕", ColorRed
 			}
@@ -8500,6 +8267,116 @@ func (h *Home) finishWorktree(inst *session.Instance, sessionID, sessionTitle, b
 			merged:       merged,
 		}
 	}
+}
+
+// resolveWorktreeRepoRoot determines the main repo root to scan for worktrees.
+// Prefers the selected session's repo context, falling back to the cwd.
+func (h *Home) resolveWorktreeRepoRoot() string {
+	if h.cursor < len(h.flatItems) {
+		item := h.flatItems[h.cursor]
+		if item.Type == session.ItemTypeSession && item.Session != nil {
+			inst := item.Session
+			if inst.IsWorktree() && inst.WorktreeRepoRoot != "" {
+				return inst.WorktreeRepoRoot
+			}
+			if inst.ProjectPath != "" && git.IsGitRepo(inst.ProjectPath) {
+				if root, err := git.GetMainWorktreePath(inst.ProjectPath); err == nil {
+					return root
+				}
+				if root, err := git.GetRepoRoot(inst.ProjectPath); err == nil {
+					return root
+				}
+			}
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil && git.IsGitRepo(cwd) {
+		if root, err := git.GetMainWorktreePath(cwd); err == nil {
+			return root
+		}
+		if root, err := git.GetRepoRoot(cwd); err == nil {
+			return root
+		}
+	}
+	return ""
+}
+
+// loadWorktreeManagerRows asynchronously scans worktrees for repoRoot,
+// cross-references active sessions to flag orphans, and checks dirty status.
+func (h *Home) loadWorktreeManagerRows(repoRoot string) tea.Cmd {
+	// Snapshot session paths under lock (Title/ID are stable after creation).
+	type sessRef struct{ title, id string }
+	sessionByPath := make(map[string]sessRef)
+	h.instancesMu.RLock()
+	for _, inst := range h.instances {
+		ref := sessRef{title: inst.Title, id: inst.ID}
+		if inst.ProjectPath != "" {
+			sessionByPath[inst.ProjectPath] = ref
+		}
+		if inst.WorktreePath != "" {
+			sessionByPath[inst.WorktreePath] = ref
+		}
+	}
+	h.instancesMu.RUnlock()
+
+	return func() tea.Msg {
+		worktrees, err := git.ListWorktrees(repoRoot)
+		if err != nil {
+			return worktreeManagerLoadedMsg{repoRoot: repoRoot, err: err}
+		}
+
+		rows := make([]worktreeManagerRow, 0, len(worktrees))
+		for i, wt := range worktrees {
+			row := worktreeManagerRow{Path: wt.Path, Branch: wt.Branch}
+			// First entry is the main worktree (never removable).
+			if i == 0 {
+				row.IsMain = true
+			}
+			if ref, ok := sessionByPath[wt.Path]; ok {
+				row.SessionTitle = ref.title
+				row.SessionID = ref.id
+			} else if !row.IsMain {
+				row.Orphaned = true
+			}
+			if dirty, derr := git.HasUncommittedChanges(wt.Path); derr == nil {
+				row.Dirty = dirty
+			}
+			rows = append(rows, row)
+		}
+		return worktreeManagerLoadedMsg{repoRoot: repoRoot, rows: rows}
+	}
+}
+
+// handleWorktreeManagerKey processes key events for the worktree manager overlay.
+func (h *Home) handleWorktreeManagerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	action := h.worktreeManager.HandleKey(msg.String())
+
+	switch action {
+	case "close":
+		return h, nil
+
+	case "reload":
+		return h, h.loadWorktreeManagerRows(h.worktreeManager.RepoRoot())
+
+	case "remove":
+		row := h.worktreeManager.SelectedRow()
+		// removable() guards against ever removing the main or an active worktree.
+		if row == nil || !row.removable() {
+			return h, nil
+		}
+		repoRoot := h.worktreeManager.RepoRoot()
+		path := row.Path
+		force := row.Dirty // Dirty orphans need --force; user confirmed with a warning.
+		h.worktreeManager.SetRemoving(true)
+		return h, func() tea.Msg {
+			if err := git.RemoveWorktree(repoRoot, path, force); err != nil {
+				return worktreeManagerRemoveResultMsg{repoRoot: repoRoot, path: path, err: err}
+			}
+			_ = git.PruneWorktrees(repoRoot)
+			return worktreeManagerRemoveResultMsg{repoRoot: repoRoot, path: path}
+		}
+	}
+
+	return h, nil
 }
 
 // getOtherActiveSessions returns sessions excluding the given ID and error-status sessions.

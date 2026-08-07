@@ -1,340 +1,216 @@
 <div align="center">
 
-<!-- Status Grid Logo -->
-<img src="site/logo.svg" alt="Agent Deck Logo" width="120">
+<img src="site/logo.svg" alt="Agent Desk" width="96">
 
-# Agent Deck
+# Agent Desk
 
-**Your AI agent command center**
+**Terminal command center for AI coding agents.**
 
-[![GitHub Stars](https://img.shields.io/github/stars/asheshgoplani/agent-deck?style=for-the-badge&logo=github&color=yellow&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck/stargazers)
-[![Downloads](https://img.shields.io/github/downloads/asheshgoplani/agent-deck/total?style=for-the-badge&logo=github&color=bb9af7&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck/releases)
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=for-the-badge&logo=go&labelColor=1a1b26)](https://go.dev)
-[![License](https://img.shields.io/badge/License-MIT-9ece6a?style=for-the-badge&labelColor=1a1b26)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-7aa2f7?style=for-the-badge&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck)
-[![Latest Release](https://img.shields.io/github/v/release/asheshgoplani/agent-deck?style=for-the-badge&color=e0af68&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck/releases)
-[![Discord](https://img.shields.io/discord/1469423271144587379?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2&labelColor=1a1b26)](https://discord.gg/e4xSs6NBN8)
+Run and switch between Claude Code, Gemini, Codex, and other terminal AI tools —
+each in its own tmux session — from one keyboard-driven view.
 
-[Features](#features) . [Conductor](#conductor) . [Install](#installation) . [Quick Start](#quick-start) . [Docs](#documentation) . [Discord](https://discord.gg/e4xSs6NBN8) . [FAQ](#faq)
+[![Release](https://img.shields.io/github/v/release/millwright-software/agent-desk?style=flat-square&color=e0af68&labelColor=1a1b26)](https://github.com/millwright-software/agent-desk/releases)
+[![License](https://img.shields.io/badge/License-MIT-9ece6a?style=flat-square&labelColor=1a1b26)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat-square&logo=go&labelColor=1a1b26)](https://go.dev)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-7aa2f7?style=flat-square&labelColor=1a1b26)](#install)
 
 </div>
 
-<details>
-<summary><b>Ask AI about Agent Deck</b></summary>
+> **A Millwright Software fork of [`asheshgoplani/agent-deck`](https://github.com/asheshgoplani/agent-deck)** by Ashesh Goplani.
+> Maintained independently, distributed under the original MIT license (see [`LICENSE`](LICENSE)); upstream
+> authorship is preserved in the commit history.
 
-**Option 1: Claude Code Skill** (recommended for Claude Code users)
-```bash
-/plugin marketplace add asheshgoplani/agent-deck
-/plugin install agent-deck@agent-deck-help
-```
-Then ask: *"How do I set up MCP pooling?"*
+## About this fork
 
-**Option 2: OpenCode** (has built-in Claude skill compatibility)
-```bash
-# Create skill directory
-mkdir -p ~/.claude/skills/agent-deck/references
+A personal, stripped-down fork, tuned for how I work.
 
-# Download skill and references
-curl -sL https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/skills/agent-deck/SKILL.md \
-  > ~/.claude/skills/agent-deck/SKILL.md
-for f in cli-reference config-reference tui-reference troubleshooting; do
-  curl -sL "https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/skills/agent-deck/references/${f}.md" \
-    > ~/.claude/skills/agent-deck/references/${f}.md
-done
-```
-OpenCode will auto-discover the skill from `~/.claude/skills/`.
+**What's gone:** the conductor orchestration layer and the web/dashboard surface — just Claude Code and GitHub
+Copilot CLI in tmux.
 
-**Option 3: Any LLM** (ChatGPT, Claude, Gemini, etc.)
-```
-Read https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/llms-full.txt
-and answer: How do I fork a session?
-```
+**What's sharper** — the controls I use every day:
 
-</details>
+- **Name-forward path picker** — folder name first, `~` collapse, recent-project stars
+- **Model + mode on every row** — see each session's model and auto/manual mode at a glance
+- **Manual flags** (`u`) — mark a session unread or parked to come back to
+- **Per-session color schemes** (`c`) — tint the tmux window and preview per session
+- **Worktree-manager overlay** — clear orphaned worktrees without dropping to the CLI
 
-https://github.com/user-attachments/assets/e4f55917-435c-45ba-92cc-89737d0d1401
+Upstream is bigger, more featured, and actively maintained — if you want the full toolkit, use it.
 
-## The Problem
+---
 
-Running Claude Code on 10 projects? OpenCode on 5 more? Another agent somewhere in the background?
+## What it does
 
-**Managing multiple AI sessions gets messy fast.** Too many terminal tabs. Hard to track what's running, what's waiting, what's done. Switching between projects means hunting through windows.
+Running Claude Code on a dozen projects, plus a couple of Gemini and Codex sessions? Managing that as a wall of
+terminal tabs gets messy fast — hard to see what's running, what's waiting on you, and where you left off.
 
-## The Solution
+Agent Desk puts every agent session in one place:
 
-**Agent Deck is mission control for your AI coding agents.**
+- **See status at a glance** — running, waiting, idle, or errored, for every session
+- **Switch in a keystroke** — jump to any session instantly; attach/detach without losing state
+- **Stay organized** — groups, fuzzy search, manual flags, and git worktrees
+- **Fork Claude conversations** — branch a session with full context to try a different approach
 
-One terminal. All your agents. Complete visibility.
+It's tmux underneath, with AI-aware status detection and session management layered on top.
 
-- **See everything at a glance** — running, waiting, or idle status for every agent instantly
-- **Switch in milliseconds** — jump between any session with a single keystroke
-- **Stay organized** — groups, search, notifications, and git worktrees keep everything manageable
+## Install
 
-## Features
+**Works on:** macOS, Linux, Windows (WSL). Requires `tmux`.
 
-### Fork Sessions
-
-Try different approaches without losing context. Fork any Claude conversation instantly. Each fork inherits the full conversation history.
-
-- Press `f` for quick fork, `F` to customize name/group
-- Fork your forks to explore as many branches as you need
-
-### MCP Manager
-
-Attach MCP servers without touching config files. Need web search? Browser automation? Toggle them on per project or globally. Agent Deck handles the restart automatically.
-
-- Press `M` to open, `Space` to toggle, `Tab` to cycle scope (LOCAL/GLOBAL)
-- Define your MCPs once in `~/.agent-deck/config.toml`, then toggle per session — see [Configuration Reference](skills/agent-deck/references/config-reference.md)
-
-### MCP Socket Pool
-
-Running many sessions? Socket pooling shares MCP processes across all sessions via Unix sockets, reducing MCP memory usage by 85-90%. Connections auto-recover from MCP crashes in ~3 seconds via a reconnecting proxy. Enable with `pool_all = true` in [config.toml](skills/agent-deck/references/config-reference.md).
-
-### Search
-
-Press `/` to fuzzy-search across all sessions. Filter by status with `!` (running), `@` (waiting), `#` (idle), `$` (error). Press `G` for global search across all Claude conversations.
-
-### Status Detection
-
-Smart polling detects what every agent is doing right now:
-
-| Status | Symbol | What It Means |
-|--------|--------|---------------|
-| **Running** | `●` green | Agent is actively working |
-| **Waiting** | `◐` yellow | Needs your input |
-| **Idle** | `○` gray | Ready for commands |
-| **Error** | `✕` red | Something went wrong |
-
-### Notification Bar
-
-Waiting sessions appear right in your tmux status bar. Press `Ctrl+b 1-6` to jump directly to them.
-
-```
-⚡ [1] frontend [2] api [3] backend
-```
-
-### Git Worktrees
-
-Multiple agents can work on the same repo without conflicts. Each worktree is an isolated working directory with its own branch.
-
-- `agent-deck add . -c claude --worktree feature/a --new-branch` creates a session in a new worktree
-- `agent-deck add . --worktree feature/b -b --location subdirectory` places the worktree under `.worktrees/` inside the repo
-- `agent-deck worktree finish "My Session"` merges the branch, removes the worktree, and deletes the session
-- `agent-deck worktree cleanup` finds and removes orphaned worktrees
-
-Configure the default worktree location in `~/.agent-deck/config.toml`:
-
-```toml
-[worktree]
-default_location = "subdirectory"  # "sibling" (default), "subdirectory", or a custom path
-```
-
-`sibling` creates worktrees next to the repo (`repo-branch`). `subdirectory` creates them inside it (`repo/.worktrees/branch`). A custom path like `~/worktrees` or `/tmp/worktrees` creates repo-namespaced worktrees at `<path>/<repo_name>/<branch>`. The `--location` flag overrides the config per session.
-
-### Conductor
-
-Conductors are persistent Claude Code sessions that monitor and orchestrate all your other sessions. They watch for sessions that need help, auto-respond when confident, and escalate to you when they can't. Optionally connect **Telegram** and/or **Slack** for remote control.
-
-Create as many conductors as you need per profile:
+**Quick install** (prebuilt binary — macOS arm64/Intel, Linux amd64/arm64):
 
 ```bash
-# First-time setup (asks about Telegram/Slack, then creates the conductor)
-agent-deck -p work conductor setup ops --description "Ops monitor"
-
-# Add more conductors to the same profile (no prompts)
-agent-deck -p work conductor setup infra --description "Infra watcher"
-agent-deck conductor setup personal --description "Personal project monitor"
+curl -fsSL https://raw.githubusercontent.com/millwright-software/agent-desk/main/install.sh | bash
 ```
 
-Each conductor gets its own directory, identity, and settings:
-
-```
-~/.agent-deck/conductor/
-├── CLAUDE.md           # Shared knowledge (CLI ref, protocols, rules)
-├── bridge.py           # Bridge daemon (Telegram/Slack, if configured)
-├── ops/
-│   ├── CLAUDE.md       # Identity: "You are ops, a conductor for the work profile"
-│   ├── meta.json       # Config: name, profile, description
-│   ├── state.json      # Runtime state
-│   └── task-log.md     # Action log
-└── infra/
-    ├── CLAUDE.md
-    └── meta.json
-```
-
-**CLI commands:**
+**With Go** (requires Go 1.24+):
 
 ```bash
-agent-deck conductor list                    # List all conductors
-agent-deck conductor list --profile work     # Filter by profile
-agent-deck conductor status                  # Health check (all)
-agent-deck conductor status ops              # Health check (specific)
-agent-deck conductor teardown ops            # Stop a conductor
-agent-deck conductor teardown --all --remove # Remove everything
+go install github.com/millwright-software/agent-desk/cmd/agent-desk@latest
 ```
 
-**Telegram bridge** (optional): Connect a Telegram bot for mobile monitoring. The bridge routes messages to specific conductors using a `name: message` prefix:
-
-```
-ops: check the frontend session      → routes to conductor-ops
-infra: restart all error sessions    → routes to conductor-infra
-/status                              → aggregated status across all profiles
-```
-
-**Slack bridge** (optional): Connect a Slack bot for channel-based monitoring via Socket Mode. The bot listens in a dedicated channel and replies in threads to keep the channel clean. Uses the same `name: message` routing, plus slash commands:
-
-```
-ops: check the frontend session      → routes to conductor-ops (reply in thread)
-/ad-status                           → aggregated status across all profiles
-/ad-sessions                         → list all sessions
-/ad-restart [name]                   → restart a conductor
-/ad-help                             → list available commands
-```
-
-<details>
-<summary><b>Slack setup</b></summary>
-
-1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
-2. Enable **Socket Mode** → generate an app-level token (`xapp-...`)
-3. Under **OAuth & Permissions**, add bot scopes: `chat:write`, `channels:history`, `channels:read`, `app_mentions:read`
-4. Under **Event Subscriptions**, subscribe to bot events: `message.channels`, `app_mention`
-5. If using slash commands, create: `/ad-status`, `/ad-sessions`, `/ad-restart`, `/ad-help`
-6. Install the app to your workspace
-7. Invite the bot to your channel (`/invite @botname`)
-8. Run `agent-deck conductor setup <name>` and enter your bot token (`xoxb-...`), app token (`xapp-...`), and channel ID (`C01234...`)
-
-</details>
-
-Both Telegram and Slack can run simultaneously — the bridge daemon handles both concurrently and sends event-driven notifications to all configured platforms.
-
-**Event-Driven**: Conductors receive instant notifications when session statuses change (e.g., a session finishes processing and starts waiting for input), keeping them actively monitoring your sessions without polling delays.
-
-### Multi-Tool Support
-
-Agent Deck works with any terminal-based AI tool:
-
-| Tool | Integration Level |
-|------|-------------------|
-| **Claude Code** | Full (status, MCP, fork, resume) |
-| **Gemini CLI** | Full (status, MCP, resume) |
-| **OpenCode** | Status detection, organization |
-| **Codex** | Status detection, organization |
-| **Cursor** (terminal) | Status detection, organization |
-| **Custom tools** | Configurable via `[tools.*]` in config.toml |
-
-## Installation
-
-**Works on:** macOS, Linux, Windows (WSL)
+**From source:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/install.sh | bash
+git clone https://github.com/millwright-software/agent-desk.git
+cd agent-desk
+make install
 ```
 
-Then run: `agent-deck`
+Then run `agent-desk`. To update, re-run the installer (or `go install …@latest` / `git pull && make install`).
 
-<details>
-<summary>Other install methods</summary>
-
-**Homebrew**
-```bash
-brew install asheshgoplani/tap/agent-deck
-```
-
-**Go**
-```bash
-go install github.com/asheshgoplani/agent-deck/cmd/agent-deck@latest
-```
-
-**From Source**
-```bash
-git clone https://github.com/asheshgoplani/agent-deck.git && cd agent-deck && make install
-```
-
-</details>
-
-### Claude Code Skill
-
-Install the agent-deck skill for AI-assisted session management:
+## Quick start
 
 ```bash
-/plugin marketplace add asheshgoplani/agent-deck
-/plugin install agent-deck@agent-deck
+agent-desk                        # Launch the TUI
+agent-desk add . -c claude        # Add the current dir as a Claude session
+agent-desk session fork my-proj   # Fork a Claude session
+agent-desk mcp attach my-proj exa # Attach an MCP server to a session
 ```
 
-<details>
-<summary>Uninstalling</summary>
-
-```bash
-agent-deck uninstall              # Interactive uninstall
-agent-deck uninstall --keep-data  # Remove binary only, keep sessions
-```
-
-See [Troubleshooting](skills/agent-deck/references/troubleshooting.md#uninstalling) for full details.
-
-</details>
-
-## Quick Start
-
-```bash
-agent-deck                        # Launch TUI
-agent-deck add . -c claude        # Add current dir with Claude
-agent-deck session fork my-proj   # Fork a Claude session
-agent-deck mcp attach my-proj exa # Attach MCP to session
-```
-
-### Key Shortcuts
+### Key shortcuts
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Attach to session |
 | `n` | New session |
 | `f` / `F` | Fork (quick / dialog) |
+| `u` | Cycle manual flag: unread → parked → normal |
 | `M` | MCP Manager |
-| `/` / `G` | Search / Global search |
+| `/` / `G` | Search / global search across all Claude conversations |
+| `Shift+J` / `Shift+K` | Reorder session down / up |
 | `r` | Restart session |
-| `d` | Delete |
+| `d` | Delete session |
 | `?` | Full help |
 
-See [TUI Reference](skills/agent-deck/references/tui-reference.md) for all shortcuts and [CLI Reference](skills/agent-deck/references/cli-reference.md) for all commands.
+See the [TUI Reference](skills/agent-desk/references/tui-reference.md) for every shortcut and the
+[CLI Reference](skills/agent-desk/references/cli-reference.md) for every command.
+
+## Features
+
+### Status detection
+
+Agent Desk polls each session and infers what its agent is doing:
+
+| Status | Symbol | Meaning |
+|--------|--------|---------|
+| **Running** | `●` green | Actively working |
+| **Waiting** | `◐` yellow | Needs your input |
+| **Idle** | `○` gray | Ready for commands |
+| **Error** | `✕` red | Something went wrong |
+
+For Claude, detection uses the session hook and transcript for fast, accurate state (including the current model).
+Other tools fall back to output-pattern and tmux-activity detection.
+
+### Fork sessions
+
+Fork any Claude conversation instantly — each fork inherits the full history, so you can explore a different
+approach without losing your place. Press `f` to fork, `F` to name/group it. Fork forks as deep as you like.
+
+### MCP manager
+
+Attach MCP servers without hand-editing config files. Press `M`, `Space` to toggle a server, `Tab` to cycle scope
+(local / global). Define your servers once in `~/.agent-desk/config.toml`; toggle them per session. Agent Desk
+handles the restart. See the [Configuration Reference](skills/agent-desk/references/config-reference.md).
+
+**MCP socket pool** — with `pool_all = true`, MCP processes are shared across sessions over Unix sockets, cutting
+MCP memory ~85–90% and auto-recovering from crashes in a few seconds via a reconnecting proxy.
+
+### Git worktrees
+
+Run multiple agents against the same repo without conflicts — each in an isolated worktree and branch.
+
+```bash
+agent-desk add . -c claude --worktree feature/a --new-branch   # session in a new worktree
+agent-desk worktree finish "My Session"                        # merge branch, remove worktree, delete session
+agent-desk worktree cleanup                                    # remove orphaned worktrees
+```
+
+Set the default location in `~/.agent-desk/config.toml`:
+
+```toml
+[worktree]
+default_location = "subdirectory"  # "sibling" (default), "subdirectory", or a custom path
+```
+
+### Multi-tool support
+
+| Tool | Integration |
+|------|-------------|
+| **Claude Code** | Full — status, MCP, fork, resume, model detection |
+| **Gemini CLI** | Full — status, MCP, resume |
+| **GitHub Copilot CLI** | Status detection, resume (`--continue`), organization |
+| **OpenCode / Codex / Cursor** (terminal) | Status detection + organization |
+| **Any other terminal CLI** | Wrap it via `[tools.*]` in `config.toml` |
+
+Any terminal-based AI tool can be added as a custom tool with its own launch command, icon, and status patterns:
+
+```toml
+[tools.my-ai]
+command = "my-ai-assistant"
+icon = "🧠"
+busy_patterns = ["thinking...", "processing..."]
+```
 
 ## Documentation
 
-| Guide | What's Inside |
-|-------|---------------|
-| [CLI Reference](skills/agent-deck/references/cli-reference.md) | Commands, flags, scripting examples |
-| [Configuration](skills/agent-deck/references/config-reference.md) | config.toml, MCP setup, custom tools, socket pool |
-| [TUI Reference](skills/agent-deck/references/tui-reference.md) | Keyboard shortcuts, status indicators, navigation |
-| [Troubleshooting](skills/agent-deck/references/troubleshooting.md) | Common issues, debugging, recovery, uninstalling |
+| Guide | Contents |
+|-------|----------|
+| [CLI Reference](skills/agent-desk/references/cli-reference.md) | Commands, flags, scripting |
+| [Configuration](skills/agent-desk/references/config-reference.md) | `config.toml`, MCP, custom tools, socket pool |
+| [TUI Reference](skills/agent-desk/references/tui-reference.md) | Shortcuts, status indicators, navigation |
+| [Troubleshooting](skills/agent-desk/references/troubleshooting.md) | Common issues, recovery, uninstalling |
 
-Additional resources:
-- [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute
-- [CHANGELOG.md](CHANGELOG.md) — release history
-- [llms-full.txt](llms-full.txt) — full context for LLMs
+**Ask an AI about Agent Desk** — if you use Claude Code, install the bundled skill:
 
-### Updates
-
-Agent Deck checks for updates automatically. Run `agent-deck update` to install, or set `auto_update = true` in [config.toml](skills/agent-deck/references/config-reference.md) for automatic updates.
+```bash
+/plugin marketplace add millwright-software/agent-desk
+/plugin install agent-desk@agent-desk
+```
 
 ## FAQ
 
 <details>
 <summary><b>How is this different from just using tmux?</b></summary>
 
-Agent Deck adds AI-specific intelligence on top of tmux: smart status detection (knows when Claude is thinking vs. waiting), session forking with context inheritance, MCP management, global search across conversations, and organized groups. Think of it as tmux plus AI awareness.
+Agent Desk adds AI-specific intelligence on top of tmux: status detection that knows when Claude is working vs.
+waiting, session forking with context inheritance, MCP management, global search across conversations, and
+organized groups. It's tmux plus AI awareness.
 
 </details>
 
 <details>
 <summary><b>Can I use it on Windows?</b></summary>
 
-Yes, via WSL (Windows Subsystem for Linux). [Install WSL](https://learn.microsoft.com/en-us/windows/wsl/install), then run the installer inside WSL. WSL2 is recommended for full feature support including MCP socket pooling.
+Yes, via WSL. [Install WSL](https://learn.microsoft.com/en-us/windows/wsl/install) (WSL2 recommended), then
+install Agent Desk inside it.
 
 </details>
 
 <details>
 <summary><b>Will it interfere with my existing tmux setup?</b></summary>
 
-No. Agent Deck creates its own tmux sessions with the prefix `agentdeck_*`. Your existing sessions are untouched. The installer backs up your `~/.tmux.conf` before adding optional config, and you can skip it with `--skip-tmux-config`.
+No. Agent Desk creates its own tmux sessions prefixed `agentdesk_*`; your existing sessions are untouched.
 
 </details>
 
@@ -346,24 +222,18 @@ make test     # Test
 make lint     # Lint
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## Star History
-
-If Agent Deck saves you time, give us a star! It helps others discover the project.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=asheshgoplani/agent-deck&type=Date)](https://star-history.com/#asheshgoplani/agent-deck&Date)
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT License — see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE). Original work © 2025 Ashesh Goplani; fork modifications © 2026 Millwright Software.
 
 ---
 
 <div align="center">
 
-Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [tmux](https://github.com/tmux/tmux)
+Built on [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [tmux](https://github.com/tmux/tmux).
 
-**[Docs](skills/agent-deck/references/) . [Discord](https://discord.gg/e4xSs6NBN8) . [Issues](https://github.com/asheshgoplani/agent-deck/issues) . [Discussions](https://github.com/asheshgoplani/agent-deck/discussions)**
+**[Docs](skills/agent-desk/references/) · [Issues](https://github.com/millwright-software/agent-desk/issues) · [Discussions](https://github.com/millwright-software/agent-desk/discussions)**
 
 </div>

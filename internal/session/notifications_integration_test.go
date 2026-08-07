@@ -21,7 +21,7 @@ import (
 // 4. Session is removed from notification bar
 func TestIntegration_NotificationBarFlow(t *testing.T) {
 	// Use test directory
-	testDir := filepath.Join(os.TempDir(), "agentdeck-notif-test")
+	testDir := filepath.Join(os.TempDir(), "agentdesk-notif-test")
 	_ = os.RemoveAll(testDir)
 	if err := os.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("Failed to create test directory: %v", err)
@@ -151,7 +151,7 @@ func TestIntegration_NotificationBarFlow(t *testing.T) {
 // that allows tmux keybindings to trigger acknowledgment
 func TestIntegration_SignalFileAcknowledgment(t *testing.T) {
 	// Use test directory
-	testDir := filepath.Join(os.TempDir(), "agentdeck-signal-test")
+	testDir := filepath.Join(os.TempDir(), "agentdesk-signal-test")
 	_ = os.RemoveAll(testDir)
 	if err := os.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("Failed to create test directory: %v", err)

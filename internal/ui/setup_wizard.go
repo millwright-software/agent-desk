@@ -3,10 +3,10 @@ package ui
 import (
 	"strings"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 // SetupWizard represents the first-time setup wizard dialog
@@ -53,7 +53,7 @@ func NewSetupWizard() *SetupWizard {
 		visible:             false,
 		complete:            false,
 		currentStep:         0,
-		toolOptions:         []string{"claude", "gemini", "opencode", "codex", "shell"},
+		toolOptions:         []string{"claude", "gemini", "opencode", "codex", "copilot", "shell"},
 		selectedTool:        0, // Default to Claude
 		dangerousMode:       false,
 		useDefaultConfigDir: true,
@@ -357,9 +357,9 @@ func (w *SetupWizard) View() string {
 
 	switch w.currentStep {
 	case stepWelcome:
-		content.WriteString(titleStyle.Render("Welcome to Agent Deck!"))
+		content.WriteString(titleStyle.Render("Welcome to Agent Desk!"))
 		content.WriteString("\n\n")
-		content.WriteString(labelStyle.Render("Agent Deck is a terminal session manager for AI coding agents."))
+		content.WriteString(labelStyle.Render("Agent Desk is a terminal session manager for AI coding agents."))
 		content.WriteString("\n\n")
 		content.WriteString(labelStyle.Render("This wizard will help you configure:"))
 		content.WriteString("\n")
@@ -489,7 +489,7 @@ func (w *SetupWizard) View() string {
 		}
 
 		content.WriteString("\n")
-		content.WriteString(subtitleStyle.Render("Press Enter to save and start using Agent Deck!"))
+		content.WriteString(subtitleStyle.Render("Press Enter to save and start using Agent Desk!"))
 		content.WriteString("\n\n")
 		content.WriteString(helpStyle.Render("Enter: save & finish | Esc: back"))
 	}

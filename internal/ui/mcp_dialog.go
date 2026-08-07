@@ -3,8 +3,8 @@ package ui
 import (
 	"log/slog"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
-	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -220,7 +220,7 @@ func (m *MCPDialog) Show(projectPath string, sessionID string, tool string) erro
 		}
 
 		// Add orphan LOCAL MCPs (attached in .mcp.json but not in config.toml pool)
-		// These are "ghost" MCPs that Claude loads but agent-deck couldn't previously manage
+		// These are "ghost" MCPs that Claude loads but agent-desk couldn't previously manage
 		for name := range localAttachedNames {
 			if !poolNames[name] {
 				m.localAttached = append(m.localAttached, MCPItem{
@@ -786,7 +786,7 @@ func (m *MCPDialog) renderEmptyStateHelp() string {
 		highlightStyle.Render("No MCPs configured"),
 		"",
 		helpStyle.Render("To add MCPs, edit:"),
-		pathStyle.Render("  ~/.agent-deck/config.toml"),
+		pathStyle.Render("  ~/.agent-desk/config.toml"),
 		"",
 		helpStyle.Render("Example:"),
 		helpStyle.Render("  [mcps.example]"),

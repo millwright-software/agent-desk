@@ -178,10 +178,6 @@ func NewGroupTreeWithGroups(instances []*Instance, storedGroups []*GroupData) *G
 func (t *GroupTree) rebuildGroupList() {
 	t.GroupList = make([]*Group, 0, len(t.Groups))
 	for _, g := range t.Groups {
-		// Always pin the "conductor" group to the top
-		if g.Path == "conductor" && g.Order >= 0 {
-			g.Order = -1
-		}
 		t.GroupList = append(t.GroupList, g)
 	}
 	sort.Slice(t.GroupList, func(i, j int) bool {
@@ -343,6 +339,13 @@ func (t *GroupTree) Flatten() []Item {
 	items := []Item{}
 
 	for _, group := range t.GroupList {
+		// Hide the default group while it's empty — it's a fallback bucket,
+		// not a user-created group, so it shouldn't occupy a row (or a 1-9
+		// hotkey slot) until something actually lands in it
+		if group.Path == DefaultGroupPath && len(group.Sessions) == 0 && !t.hasSubgroups(DefaultGroupPath) {
+			continue
+		}
+
 		// Calculate group nesting level from path
 		groupLevel := GetGroupLevel(group.Path)
 
@@ -538,38 +541,66 @@ func (t *GroupTree) MoveGroupDown(path string) {
 	}
 }
 
-// MoveSessionUp moves a session up within its group
-func (t *GroupTree) MoveSessionUp(inst *Instance) {
-	group, exists := t.Groups[inst.GroupPath]
-	if !exists {
-		return
+// displaySessionPeer reports whether b sits at the same tier as a in the
+// flattened view. Top-level sessions peer with other top-level sessions; a
+// sub-session peers only with siblings under the same parent. Reordering must
+// swap peers, not raw slice neighbors: Flatten nests sub-sessions under their
+// parent, so swapping a non-peer neighbor changes the slice without changing
+// the visible order — the "Shift+J/K takes two presses to move" bug.
+func displaySessionPeer(a, b *Instance) bool {
+	if a.IsSubSession() {
+		return b.IsSubSession() && b.ParentSessionID == a.ParentSessionID
 	}
-
-	for i, s := range group.Sessions {
-		if s.ID == inst.ID && i > 0 {
-			group.Sessions[i], group.Sessions[i-1] = group.Sessions[i-1], group.Sessions[i]
-			break
-		}
-	}
-	// Normalize Order for all sessions in group
-	for i, s := range group.Sessions {
-		s.Order = i
-	}
+	return !b.IsSubSession()
 }
 
-// MoveSessionDown moves a session down within its group
+// MoveSessionUp moves a session up past its nearest preceding display peer.
+func (t *GroupTree) MoveSessionUp(inst *Instance) {
+	t.moveSession(inst, -1)
+}
+
+// MoveSessionDown moves a session down past its nearest following display peer.
 func (t *GroupTree) MoveSessionDown(inst *Instance) {
-	group, exists := t.Groups[inst.GroupPath]
+	t.moveSession(inst, 1)
+}
+
+// moveSession swaps inst with the nearest display peer in the given direction
+// (-1 = up, +1 = down) within its group, then renormalizes Order.
+func (t *GroupTree) moveSession(inst *Instance, dir int) {
+	// Normalize like AddSession/RemoveSession: an instance may carry an empty
+	// GroupPath while living under the default group, so t.Groups[""] misses.
+	groupPath := inst.GroupPath
+	if groupPath == "" {
+		groupPath = DefaultGroupPath
+	}
+	group, exists := t.Groups[groupPath]
 	if !exists {
 		return
 	}
 
+	idx := -1
 	for i, s := range group.Sessions {
-		if s.ID == inst.ID && i < len(group.Sessions)-1 {
-			group.Sessions[i], group.Sessions[i+1] = group.Sessions[i+1], group.Sessions[i]
+		if s.ID == inst.ID {
+			idx = i
 			break
 		}
 	}
+	if idx < 0 {
+		return
+	}
+
+	peer := -1
+	for j := idx + dir; j >= 0 && j < len(group.Sessions); j += dir {
+		if displaySessionPeer(inst, group.Sessions[j]) {
+			peer = j
+			break
+		}
+	}
+	if peer < 0 {
+		return // already at the top/bottom of its tier
+	}
+
+	group.Sessions[idx], group.Sessions[peer] = group.Sessions[peer], group.Sessions[idx]
 	// Normalize Order for all sessions in group
 	for i, s := range group.Sessions {
 		s.Order = i
@@ -775,6 +806,16 @@ func (t *GroupTree) RenameGroup(oldPath, newName string) {
 	t.rebuildGroupList()
 }
 
+// hasSubgroups reports whether any group exists under the given path
+func (t *GroupTree) hasSubgroups(path string) bool {
+	for p := range t.Groups {
+		if strings.HasPrefix(p, path+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // DeleteGroup deletes a group, all its subgroups, and moves all sessions to default
 func (t *GroupTree) DeleteGroup(path string) []*Instance {
 	group, exists := t.Groups[path]
@@ -805,23 +846,25 @@ func (t *GroupTree) DeleteGroup(path string) []*Instance {
 	// Add sessions from the main group
 	allMovedSessions = append(allMovedSessions, group.Sessions...)
 
-	// Move all sessions to default group
-	for _, sess := range allMovedSessions {
-		sess.GroupPath = DefaultGroupPath
-	}
-
-	// Ensure default group exists
-	defaultGroup, exists := t.Groups[DefaultGroupPath]
-	if !exists {
-		defaultGroup = &Group{
-			Name:     DefaultGroupName,
-			Path:     DefaultGroupPath,
-			Expanded: true,
-			Sessions: []*Instance{},
+	// Move all sessions to default group. Only touch the default group when
+	// sessions actually moved — deleting an empty group must not resurrect it.
+	if len(allMovedSessions) > 0 {
+		for _, sess := range allMovedSessions {
+			sess.GroupPath = DefaultGroupPath
 		}
-		t.Groups[DefaultGroupPath] = defaultGroup
+
+		defaultGroup, exists := t.Groups[DefaultGroupPath]
+		if !exists {
+			defaultGroup = &Group{
+				Name:     DefaultGroupName,
+				Path:     DefaultGroupPath,
+				Expanded: true,
+				Sessions: []*Instance{},
+			}
+			t.Groups[DefaultGroupPath] = defaultGroup
+		}
+		defaultGroup.Sessions = append(defaultGroup.Sessions, allMovedSessions...)
 	}
-	defaultGroup.Sessions = append(defaultGroup.Sessions, allMovedSessions...)
 
 	// Remove the main group
 	delete(t.Groups, path)

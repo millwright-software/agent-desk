@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 )
 
 var poolLog = logging.ForComponent(logging.CompPool)
@@ -389,10 +389,10 @@ type ProxyInfo struct {
 	Clients    int
 }
 
-// DiscoverExistingSockets scans for existing pool sockets owned by another agent-deck instance
+// DiscoverExistingSockets scans for existing pool sockets owned by another agent-desk instance
 // and registers them so this instance can use them too. Returns count of discovered sockets.
 func (p *Pool) DiscoverExistingSockets() int {
-	pattern := filepath.Join("/tmp", "agentdeck-mcp-*.sock")
+	pattern := filepath.Join("/tmp", "agentdesk-mcp-*.sock")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		poolLog.Warn("socket_scan_failed", slog.String("error", err.Error()))
@@ -401,12 +401,12 @@ func (p *Pool) DiscoverExistingSockets() int {
 
 	discovered := 0
 	for _, socketPath := range matches {
-		// Extract MCP name from socket path: /tmp/agentdeck-mcp-{name}.sock
+		// Extract MCP name from socket path: /tmp/agentdesk-mcp-{name}.sock
 		base := filepath.Base(socketPath)
-		if !strings.HasPrefix(base, "agentdeck-mcp-") || !strings.HasSuffix(base, ".sock") {
+		if !strings.HasPrefix(base, "agentdesk-mcp-") || !strings.HasSuffix(base, ".sock") {
 			continue
 		}
-		name := strings.TrimPrefix(base, "agentdeck-mcp-")
+		name := strings.TrimPrefix(base, "agentdesk-mcp-")
 		name = strings.TrimSuffix(name, ".sock")
 
 		// Skip if we already have this MCP
@@ -453,7 +453,7 @@ func isSocketAliveCheck(socketPath string) bool {
 	return true
 }
 
-// RegisterExternalSocket registers an external socket owned by another agent-deck instance.
+// RegisterExternalSocket registers an external socket owned by another agent-desk instance.
 // This creates a proxy entry that points to the existing socket without starting a new process.
 func (p *Pool) RegisterExternalSocket(name, socketPath string) error {
 	p.mu.Lock()

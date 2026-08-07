@@ -17,7 +17,7 @@ import (
 
 const (
 	// GitHubRepo is the repository to check for updates
-	GitHubRepo = "asheshgoplani/agent-deck"
+	GitHubRepo = "millwright-software/agent-desk"
 
 	// CacheFileName stores the last update check result
 	CacheFileName = "update-cache.json"
@@ -77,7 +77,7 @@ func getCacheDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".agent-deck"), nil
+	return filepath.Join(home, ".agent-desk"), nil
 }
 
 // loadCache loads the update cache from disk
@@ -149,9 +149,9 @@ func getAssetURL(release *Release) string {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 
-	// Construct expected asset name: agent-deck_X.Y.Z_os_arch.tar.gz
+	// Construct expected asset name: agent-desk_X.Y.Z_os_arch.tar.gz
 	version := strings.TrimPrefix(release.TagName, "v")
-	expectedName := fmt.Sprintf("agent-deck_%s_%s_%s.tar.gz", version, goos, goarch)
+	expectedName := fmt.Sprintf("agent-desk_%s_%s_%s.tar.gz", version, goos, goarch)
 
 	for _, asset := range release.Assets {
 		if asset.Name == expectedName {
@@ -295,7 +295,7 @@ func PerformUpdate(downloadURL string) error {
 	}
 
 	// Create temp file for download
-	tmpFile, err := os.CreateTemp("", "agent-deck-update-*.tar.gz")
+	tmpFile, err := os.CreateTemp("", "agent-desk-update-*.tar.gz")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -488,7 +488,7 @@ func FormatChangelogForDisplay(entries []ChangelogEntry) string {
 	return sb.String()
 }
 
-// extractBinaryFromTarGz extracts the agent-deck binary from a .tar.gz file
+// extractBinaryFromTarGz extracts the agent-desk binary from a .tar.gz file
 func extractBinaryFromTarGz(tarPath string) ([]byte, error) {
 	file, err := os.Open(tarPath)
 	if err != nil {
@@ -513,8 +513,8 @@ func extractBinaryFromTarGz(tarPath string) ([]byte, error) {
 			return nil, err
 		}
 
-		// Look for the agent-deck binary
-		if header.Typeflag == tar.TypeReg && header.Name == "agent-deck" {
+		// Look for the agent-desk binary
+		if header.Typeflag == tar.TypeReg && header.Name == "agent-desk" {
 			data, err := io.ReadAll(tr)
 			if err != nil {
 				return nil, err
@@ -523,5 +523,5 @@ func extractBinaryFromTarGz(tarPath string) ([]byte, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("agent-deck binary not found in archive")
+	return nil, fmt.Errorf("agent-desk binary not found in archive")
 }

@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 func TestNewSearch(t *testing.T) {

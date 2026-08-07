@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 func TestNewHome(t *testing.T) {
@@ -601,9 +601,11 @@ func TestRenderHelpBarCompactWithSession(t *testing.T) {
 	if !strings.Contains(result, "Restart") {
 		t.Error("Compact help bar should contain 'Restart'")
 	}
-	// Should have fork since session can fork
-	if !strings.Contains(result, "Fork") {
-		t.Error("Compact help bar should contain 'Fork' for forkable session")
+	// Claude sessions surface the MCP hint in the compact bar.
+	// (Fork was intentionally dropped from the compact tier in the shortcut
+	// declutter; it remains in the full help bar / help overlay.)
+	if !strings.Contains(result, "MCP") {
+		t.Error("Compact help bar should contain 'MCP' for a claude session")
 	}
 	// Should NOT contain full verbose text
 	if strings.Contains(result, "Global") {
@@ -847,5 +849,118 @@ func TestHomeViewAllLayoutModes(t *testing.T) {
 				t.Errorf("Terminal %dx%d should render, got 'too small'", tc.width, tc.height)
 			}
 		})
+	}
+}
+
+func TestSessionRestartedMsgErrorClearsResumingAnimation(t *testing.T) {
+	home := NewHome()
+	inst := session.NewInstance("restart-test", "/tmp/project")
+
+	home.instancesMu.Lock()
+	home.instances = []*session.Instance{inst}
+	home.instanceByID[inst.ID] = inst
+	home.instancesMu.Unlock()
+
+	home.resumingSessions[inst.ID] = time.Now()
+
+	model, _ := home.Update(sessionRestartedMsg{
+		sessionID: inst.ID,
+		err:       fmt.Errorf("restart failed"),
+	})
+	h := model.(*Home)
+
+	if _, ok := h.resumingSessions[inst.ID]; ok {
+		t.Fatal("resuming animation should be cleared after restart error")
+	}
+	if h.err == nil {
+		t.Fatal("expected restart error to be set")
+	}
+	if !strings.Contains(h.err.Error(), "failed to restart session") {
+		t.Fatalf("unexpected error: %v", h.err)
+	}
+}
+
+func TestRestartSessionCmdSessionMissingReturnsError(t *testing.T) {
+	home := NewHome()
+	inst := session.NewInstance("restart-test", "/tmp/project")
+
+	// Build command with a valid instance, then simulate reload/delete before cmd runs.
+	cmd := home.restartSession(inst)
+	home.instancesMu.Lock()
+	delete(home.instanceByID, inst.ID)
+	home.instancesMu.Unlock()
+
+	msg := cmd()
+	restarted, ok := msg.(sessionRestartedMsg)
+	if !ok {
+		t.Fatalf("expected sessionRestartedMsg, got %T", msg)
+	}
+	if restarted.err == nil {
+		t.Fatal("expected error when session no longer exists")
+	}
+	if !strings.Contains(restarted.err.Error(), "session no longer exists") {
+		t.Fatalf("unexpected error: %v", restarted.err)
+	}
+}
+
+func TestFormatCompactDuration(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name string
+		t    time.Time
+		want string
+	}{
+		{"zero", time.Time{}, "?"},
+		{"sub-minute floors to 1m", now.Add(-30 * time.Second), "1m"},
+		{"minutes", now.Add(-7 * time.Minute), "7m"},
+		{"one minute", now.Add(-1 * time.Minute), "1m"},
+		{"hours+minutes", now.Add(-2*time.Hour - 14*time.Minute), "2h14m"},
+		{"whole hours", now.Add(-3 * time.Hour), "3h"},
+		{"days+hours", now.Add(-3*24*time.Hour - 4*time.Hour), "3d4h"},
+		{"whole days", now.Add(-2 * 24 * time.Hour), "2d"},
+		{"future clamps", now.Add(1 * time.Hour), "1m"},
+	}
+	for _, tt := range tests {
+		if got := formatCompactDuration(tt.t); got != tt.want {
+			t.Errorf("%s: formatCompactDuration = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestRenderPreviewPaneAfterCuts(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	testSession := &session.Instance{
+		ID:              "prev-1",
+		Title:           "Preview Session",
+		Tool:            "claude",
+		ProjectPath:     "/Users/erichey/Desktop/millwright-software/agent-desk",
+		GroupPath:       "vault",
+		ClaudeSessionID: "sess-abc",
+		Status:          session.StatusIdle,
+	}
+	home.flatItems = []session.Item{
+		{Type: session.ItemTypeSession, Session: testSession, Path: "vault"},
+	}
+	home.cursor = 0
+
+	// Must not panic on the rewritten render path.
+	out := home.renderPreviewPane(80, 40)
+
+	// Kept: project path.
+	if !strings.Contains(out, "agent-desk") {
+		t.Error("preview should still show the project path")
+	}
+	// Cut: the context-note section header and the analytics header.
+	if strings.Contains(out, "Context") {
+		t.Error("preview should no longer render a Context section")
+	}
+	if strings.Contains(out, "Analytics") {
+		t.Error("preview should no longer render an Analytics section")
+	}
+	// Cut: the group badge (group name rendered as a chip).
+	if strings.Contains(out, "⏱") {
+		t.Error("preview should no longer render the activity-time line")
 	}
 }

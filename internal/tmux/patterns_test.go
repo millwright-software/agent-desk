@@ -58,6 +58,29 @@ func TestDefaultRawPatterns_Gemini(t *testing.T) {
 	}
 }
 
+func TestDefaultRawPatterns_Copilot(t *testing.T) {
+	raw := DefaultRawPatterns("copilot")
+	if raw == nil {
+		t.Fatal("expected non-nil for copilot")
+	}
+	if len(raw.BusyPatterns) == 0 {
+		t.Error("copilot should have busy patterns")
+	}
+	if len(raw.PromptPatterns) == 0 {
+		t.Error("copilot should have prompt patterns")
+	}
+	// The documented "Thinking" busy indicator must be present.
+	found := false
+	for _, p := range raw.BusyPatterns {
+		if p == "Thinking" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("copilot busy patterns should include \"Thinking\"")
+	}
+}
+
 func TestDefaultRawPatterns_Unknown(t *testing.T) {
 	raw := DefaultRawPatterns("unknowntool")
 	if raw != nil {

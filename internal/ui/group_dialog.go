@@ -174,6 +174,7 @@ func (g *GroupDialog) GetSessionID() string {
 func (g *GroupDialog) Hide() {
 	g.visible = false
 	g.nameInput.Blur()
+	g.nameInput.CharLimit = 50 // Reset to default
 }
 
 // IsVisible returns whether the dialog is visible

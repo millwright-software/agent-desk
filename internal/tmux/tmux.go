@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/logging"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -30,7 +30,7 @@ var mcpLog = logging.ForComponent(logging.CompMCP)
 // Callers should preserve previous state rather than transitioning to error/inactive.
 var ErrCaptureTimeout = errors.New("capture-pane timed out")
 
-const SessionPrefix = "agentdeck_"
+const SessionPrefix = "agentdesk_"
 
 // Session cache - reduces subprocess spawns from O(n) to O(1) per tick
 // Instead of calling `tmux has-session` and `tmux display-message` for each session,
@@ -479,6 +479,15 @@ type Session struct {
 	// Example: {"allow-passthrough": "all", "history-limit": "50000"}
 	OptionOverrides map[string]string
 
+	// Per-session color scheme styling (from a session.ColorScheme preset).
+	// WindowStyle is the tmux window-style/window-active-style value
+	// (e.g. "bg=#1a1b26,fg=#c0caf5", or "default"). StatusStyle is the
+	// status-style value, or "" to keep the built-in status bar styling.
+	// Both empty => default behavior. Applied in Start() and ConfigureStatusBar,
+	// and live via ApplyColorScheme().
+	WindowStyle string
+	StatusStyle string
+
 	// Custom patterns for generic tool support
 	customToolName       string
 	customBusyPatterns   []string
@@ -606,13 +615,13 @@ func (s *Session) SetInjectStatusLine(inject bool) {
 }
 
 // LogFile returns the path to this session's log file
-// Logs are stored in ~/.agent-deck/logs/<session-name>.log
+// Logs are stored in ~/.agent-desk/logs/<session-name>.log
 func (s *Session) LogFile() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		homeDir = "/tmp"
 	}
-	logDir := filepath.Join(homeDir, ".agent-deck", "logs")
+	logDir := filepath.Join(homeDir, ".agent-desk", "logs")
 	return filepath.Join(logDir, s.Name+".log")
 }
 
@@ -622,7 +631,7 @@ func LogDir() string {
 	if err != nil {
 		homeDir = "/tmp"
 	}
-	return filepath.Join(homeDir, ".agent-deck", "logs")
+	return filepath.Join(homeDir, ".agent-desk", "logs")
 }
 
 // NewSession creates a new Session instance with a unique name
@@ -899,10 +908,14 @@ func (s *Session) Start(command string) error {
 	// where Exists() returns false because cache was refreshed before session creation
 	registerSessionInCache(s.Name)
 
-	// Set default window/pane styles to prevent color issues in some terminals (Warp, etc.)
-	// This ensures no unexpected background colors are applied
-	_ = exec.Command("tmux", "set-option", "-t", s.Name, "window-style", "default").Run()
-	_ = exec.Command("tmux", "set-option", "-t", s.Name, "window-active-style", "default").Run()
+	// Set window/pane styles. Defaults to "default" (inherit terminal colors,
+	// preventing color issues in Warp etc.); a per-session color scheme overrides it.
+	windowStyle := s.WindowStyle
+	if windowStyle == "" {
+		windowStyle = "default"
+	}
+	_ = exec.Command("tmux", "set-option", "-t", s.Name, "window-style", windowStyle).Run()
+	_ = exec.Command("tmux", "set-option", "-t", s.Name, "window-active-style", windowStyle).Run()
 
 	// Enable mouse mode for proper scrolling (per-session, doesn't affect user's other sessions)
 	// This allows:
@@ -977,7 +990,7 @@ func (s *Session) Start(command string) error {
 
 	// Note: We tried using tmux hooks for instant GREEN status detection:
 	// - alert-activity: Only fires for background windows (not current window)
-	// - after-send-keys: Fires for ALL send-keys calls (too noisy, catches agent-deck operations)
+	// - after-send-keys: Fires for ALL send-keys calls (too noisy, catches agent-desk operations)
 	// Neither works reliably for detecting user input. We use polling for GREEN instead.
 	// The Stop hook (via Claude settings) handles instant YELLOW detection.
 
@@ -1025,17 +1038,41 @@ func (s *Session) ConfigureStatusBar() {
 	// The hint uses subtle gray (#565f89) so it doesn't compete with session info
 	rightStatus := fmt.Sprintf("#[fg=#565f89]ctrl+q detach#[default] │ 📁 %s | %s ", s.DisplayName, folderName)
 
+	// Status bar colors: per-session color scheme if set, else the built-in style.
+	statusStyle := s.StatusStyle
+	if statusStyle == "" {
+		statusStyle = "bg=#1a1b26,fg=#a9b1d6"
+	}
+
 	// PERFORMANCE: Batch all 5 status bar options into single subprocess call
 	// Uses tmux command chaining with \; separator (73% reduction in subprocess calls)
 	// Before: 5 separate exec.Command calls = 5 subprocess spawns
 	// After: 1 exec.Command call = 1 subprocess spawn
 	cmd := exec.Command("tmux",
 		"set-option", "-t", s.Name, "status", "on", ";",
-		"set-option", "-t", s.Name, "status-style", "bg=#1a1b26,fg=#a9b1d6", ";",
+		"set-option", "-t", s.Name, "status-style", statusStyle, ";",
 		"set-option", "-t", s.Name, "status-left-length", "120", ";",
 		"set-option", "-t", s.Name, "status-right", rightStatus, ";",
 		"set-option", "-t", s.Name, "status-right-length", "80")
 	_ = cmd.Run()
+}
+
+// ApplyColorScheme applies the current WindowStyle/StatusStyle to the live tmux
+// session immediately (no restart). Safe to call when the session does not yet
+// exist — the styles are still stored on the struct and applied on next Start().
+func (s *Session) ApplyColorScheme() {
+	if !s.Exists() {
+		return
+	}
+	windowStyle := s.WindowStyle
+	if windowStyle == "" {
+		windowStyle = "default"
+	}
+	_ = exec.Command("tmux",
+		"set-option", "-t", s.Name, "window-style", windowStyle, ";",
+		"set-option", "-t", s.Name, "window-active-style", windowStyle).Run()
+	// Refresh the status bar (picks up StatusStyle).
+	s.ConfigureStatusBar()
 }
 
 // EnableMouseMode enables mouse scrolling, clipboard integration, and optimal settings
@@ -2265,7 +2302,16 @@ func (s *Session) GetLastActivityTime() time.Time {
 	if s.stateTracker == nil {
 		return time.Time{}
 	}
-	return s.stateTracker.lastChangeTime
+	// Use tmux's own window_activity timestamp: it reflects real terminal
+	// output and survives TUI restarts. lastChangeTime is deliberately NOT
+	// used as a fallback — trackers seed it with time.Now() (or now-10s) on
+	// creation/restore, which made every session look freshly active after
+	// a TUI restart. Zero means "no data yet"; callers fall back to the
+	// persisted LastAccessedAt/CreatedAt.
+	if s.stateTracker.lastActivityTimestamp > 0 {
+		return time.Unix(s.stateTracker.lastActivityTimestamp, 0)
+	}
+	return time.Time{}
 }
 
 // GetWaitingSince returns when the session transitioned to waiting status
@@ -3002,7 +3048,7 @@ func (s *Session) GetWorkDir() string {
 	return strings.TrimSpace(string(output))
 }
 
-// ListAllSessions returns all Agent Deck tmux sessions
+// ListAllSessions returns all Agent Desk tmux sessions
 func ListAllSessions() ([]*Session, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
@@ -3206,11 +3252,11 @@ func RunLogMaintenance(maxSizeMB int, maxLines int, removeOrphans bool) {
 // Notification Bar Helper Functions
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ListAgentDeckSessions returns the names of all agentdeck tmux sessions.
+// ListAgentDeskSessions returns the names of all agentdesk tmux sessions.
 // This is used to update notification bars across ALL sessions, not just
 // those in the current profile. This ensures consistent notification bars
 // when users switch between sessions.
-func ListAgentDeckSessions() ([]string, error) {
+func ListAgentDeskSessions() ([]string, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
 	if err != nil {
@@ -3253,7 +3299,7 @@ func ClearStatusLeft(sessionName string) error {
 
 // SetStatusLeftGlobal sets the left side of tmux status bar globally.
 // This is a MAJOR performance optimization: ONE tmux call instead of 100+.
-// All agentdeck sessions inherit this global setting.
+// All agentdesk sessions inherit this global setting.
 func SetStatusLeftGlobal(text string) error {
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	cmd := exec.Command("tmux", "set-option", "-g", "status-left", escaped)
@@ -3266,7 +3312,7 @@ func ClearStatusLeftGlobal() error {
 	return cmd.Run()
 }
 
-// InitializeStatusBarOptions sets optimal status bar options for agent-deck.
+// InitializeStatusBarOptions sets optimal status bar options for agent-desk.
 // Fixes truncation by setting adequate status-left-length globally.
 // Should be called once during startup.
 func InitializeStatusBarOptions() error {
@@ -3336,7 +3382,7 @@ func BindSwitchKey(key, targetSession string) error {
 }
 
 // BindSwitchKeyWithAck binds a number key to switch to target session AND
-// writes a signal file so agent-deck can acknowledge the session was selected.
+// writes a signal file so agent-desk can acknowledge the session was selected.
 // This enables proper acknowledgment when user presses Ctrl+b 1-6 shortcuts.
 func BindSwitchKeyWithAck(key, targetSession, sessionID string) error {
 	// Get signal file path
@@ -3347,7 +3393,7 @@ func BindSwitchKeyWithAck(key, targetSession, sessionID string) error {
 	}
 
 	// Create a compound command that:
-	// 1. Writes the session ID to a signal file (for agent-deck to acknowledge)
+	// 1. Writes the session ID to a signal file (for agent-desk to acknowledge)
 	// 2. Switches to the target session
 	script := fmt.Sprintf("echo '%s' > '%s' && tmux switch-client -t '%s'",
 		sessionID, signalFile, targetSession)
@@ -3361,7 +3407,7 @@ func GetAckSignalPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(homeDir, ".agent-deck", "ack-signal"), nil
+	return filepath.Join(homeDir, ".agent-desk", "ack-signal"), nil
 }
 
 // ReadAndClearAckSignal reads the session ID from the signal file and deletes it.
@@ -3386,7 +3432,7 @@ func ReadAndClearAckSignal() string {
 // UnbindKey removes a key binding and restores default behavior.
 // After unbinding, attempts to restore the default behavior where number keys
 // select windows. The restore is best-effort since it may fail in environments
-// without windows (e.g., CI) and agent-deck rebinds keys every 2s anyway.
+// without windows (e.g., CI) and agent-desk rebinds keys every 2s anyway.
 func UnbindKey(key string) error {
 	// First unbind our custom binding
 	_ = exec.Command("tmux", "unbind-key", key).Run()
@@ -3410,7 +3456,7 @@ func GetActiveSession() (string, error) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-// DiscoverAllTmuxSessions returns all tmux sessions (including non-Agent Deck ones)
+// DiscoverAllTmuxSessions returns all tmux sessions (including non-Agent Desk ones)
 func DiscoverAllTmuxSessions() ([]*Session, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}:#{pane_current_path}")
 	output, err := cmd.Output()
@@ -3445,7 +3491,7 @@ func DiscoverAllTmuxSessions() ([]*Session, error) {
 			WorkDir:     workDir,
 		}
 
-		// If it's an agent-deck session, clean up the display name
+		// If it's an agent-desk session, clean up the display name
 		if strings.HasPrefix(sessionName, SessionPrefix) {
 			sess.DisplayName = strings.TrimPrefix(sessionName, SessionPrefix)
 		}

@@ -12,7 +12,7 @@ import (
 // CRITICAL: This was missing and caused test data to overwrite production sessions!
 func TestMain(m *testing.M) {
 	// Force _test profile for all tests in this package
-	os.Setenv("AGENTDECK_PROFILE", "_test")
+	os.Setenv("AGENTDESK_PROFILE", "_test")
 
 	// Run tests
 	code := m.Run()
@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 
 // cleanupTestSessions kills any tmux sessions created during testing.
 // IMPORTANT: Only match specific known test artifacts, NOT broad patterns.
-// Broad patterns like HasPrefix("agentdeck_test") or Contains("test_") kill
+// Broad patterns like HasPrefix("agentdesk_test") or Contains("test_") kill
 // real user sessions with "test" in their title. Each test already has
 // defer Kill() which handles cleanup reliably (runs on panic, Fatal, etc).
 func cleanupTestSessions() {

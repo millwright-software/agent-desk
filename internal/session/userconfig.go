@@ -13,8 +13,8 @@ import (
 
 	dark "github.com/thiagokokada/dark-mode-go"
 
-	"github.com/asheshgoplani/agent-deck/internal/platform"
-	"github.com/asheshgoplani/agent-deck/internal/tmux"
+	"github.com/millwright-software/agent-desk/internal/platform"
+	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
 // UserConfigFileName is the TOML config file for user preferences
@@ -89,11 +89,17 @@ type UserConfig struct {
 	// Status defines session status detection settings
 	Status StatusSettings `toml:"status"`
 
-	// Conductor defines conductor (meta-agent orchestration) settings
-	Conductor ConductorSettings `toml:"conductor"`
-
 	// Tmux defines tmux option overrides applied to every session
 	Tmux TmuxSettings `toml:"tmux"`
+
+	// UI defines layout preferences
+	UI UISettings `toml:"ui"`
+}
+
+// UISettings defines layout preferences
+type UISettings struct {
+	// SidebarWidthPercent sets the sidebar width in dual-column layout (15-50, default 35)
+	SidebarWidthPercent int `toml:"sidebar_width_percent"`
 }
 
 // MCPPoolSettings defines HTTP MCP pool configuration
@@ -101,7 +107,7 @@ type MCPPoolSettings struct {
 	// Enabled enables HTTP pool mode (default: false)
 	Enabled bool `toml:"enabled"`
 
-	// AutoStart starts pool when agent-deck launches (default: true)
+	// AutoStart starts pool when agent-desk launches (default: true)
 	AutoStart bool `toml:"auto_start"`
 
 	// PortStart is the first port in the pool range (default: 8001)
@@ -113,7 +119,7 @@ type MCPPoolSettings struct {
 	// StartOnDemand starts MCPs lazily on first attach (default: false)
 	StartOnDemand bool `toml:"start_on_demand"`
 
-	// ShutdownOnExit stops HTTP servers when agent-deck quits (default: true)
+	// ShutdownOnExit stops HTTP servers when agent-desk quits (default: true)
 	ShutdownOnExit bool `toml:"shutdown_on_exit"`
 
 	// PoolMCPs is the list of MCPs to run in pool mode
@@ -263,9 +269,9 @@ type NotificationsConfig struct {
 	MaxShown int `toml:"max_shown"`
 }
 
-// InstanceSettings configures multiple agent-deck instance behavior
+// InstanceSettings configures multiple agent-desk instance behavior
 type InstanceSettings struct {
-	// AllowMultiple allows running multiple agent-deck TUI instances for the same profile
+	// AllowMultiple allows running multiple agent-desk TUI instances for the same profile
 	// When true (default), multiple instances can run, but only the first (primary) manages the notification bar
 	// When false, only one instance can run per profile
 	AllowMultiple *bool `toml:"allow_multiple"`
@@ -288,7 +294,7 @@ type ShellSettings struct {
 
 	// InitScript is an optional shell script or command to run before each session
 	// Useful for direnv, nvm, pyenv, etc.
-	// Can be a file path (e.g., "~/.agent-deck/init.sh") or inline command
+	// Can be a file path (e.g., "~/.agent-desk/init.sh") or inline command
 	// (e.g., 'eval "$(direnv hook bash)"')
 	InitScript string `toml:"init_script"`
 
@@ -404,7 +410,7 @@ type ClaudeSettings struct {
 	EnvFile string `toml:"env_file"`
 
 	// HooksEnabled enables Claude Code hooks for real-time status detection.
-	// When enabled, agent-deck uses lifecycle hooks (SessionStart, Stop, etc.)
+	// When enabled, agent-desk uses lifecycle hooks (SessionStart, Stop, etc.)
 	// for instant, deterministic status updates instead of polling tmux content.
 	// Default: true (nil = use default true, set false to disable)
 	HooksEnabled *bool `toml:"hooks_enabled"`
@@ -475,10 +481,19 @@ type WorktreeSettings struct {
 	DefaultLocation string `toml:"default_location"`
 
 	// PathTemplate: custom path template for worktree location.
-	// Variables: {repo-name}, {repo-root}, {branch}, {session-id}
+	// Variables:
+	//   {repo-name}, {repo-root}, {session-id}
+	//   {branch}         -> sanitized (human-friendly, may collide)
+	//   {branch-escaped} -> URL-escaped (collision-resistant, reversible)
 	// Unknown variables like {foo} are left as-is in the path.
 	// If set, overrides DefaultLocation.
 	PathTemplate *string `toml:"path_template"`
+
+	// BranchPrefix is the prefix for auto-generated branch names when creating
+	// worktree sessions. For example, "feature/" produces "feature/my-session".
+	// Set to "" to disable auto-prefixing (just the session name).
+	// Default: "feature/" when not set.
+	BranchPrefix *string `toml:"branch_prefix"`
 }
 
 // Template returns the path template if set, or empty string if nil.
@@ -487,6 +502,15 @@ func (w *WorktreeSettings) Template() string {
 		return ""
 	}
 	return *w.PathTemplate
+}
+
+// Prefix returns the branch prefix for auto-generated worktree branches,
+// defaulting to "feature/" when unset.
+func (w *WorktreeSettings) Prefix() string {
+	if w.BranchPrefix == nil {
+		return "feature/"
+	}
+	return *w.BranchPrefix
 }
 
 // GlobalSearchSettings defines global conversation search configuration
@@ -626,7 +650,7 @@ type MCPDef struct {
 	Headers map[string]string `toml:"headers"`
 
 	// Server defines how to auto-start an HTTP MCP server process
-	// When set, agent-deck will start the server before connecting via HTTP
+	// When set, agent-desk will start the server before connecting via HTTP
 	// This is optional - you can also connect to externally managed servers
 	Server *HTTPServerConfig `toml:"server"`
 }
@@ -661,7 +685,7 @@ func (m *MCPDef) HasAutoStartServer() bool {
 }
 
 // TmuxSettings allows users to override tmux options applied to every session.
-// Options are applied AFTER agent-deck's defaults, so they take precedence.
+// Options are applied AFTER agent-desk's defaults, so they take precedence.
 //
 // Example config.toml:
 //
@@ -669,7 +693,7 @@ func (m *MCPDef) HasAutoStartServer() bool {
 //	inject_status_line = false
 //	options = { "allow-passthrough" = "all", "history-limit" = "50000" }
 type TmuxSettings struct {
-	// InjectStatusLine controls whether agent-deck injects a custom status line
+	// InjectStatusLine controls whether agent-desk injects a custom status line
 	// into new tmux sessions. When false, the tmux status bar is not modified,
 	// allowing users to use their own tmux status line configuration.
 	// Default: true (nil = use default true)
@@ -714,7 +738,7 @@ var (
 
 // GetUserConfigPath returns the path to the user config file
 func GetUserConfigPath() (string, error) {
-	dir, err := GetAgentDeckDir()
+	dir, err := GetAgentDeskDir()
 	if err != nil {
 		return "", err
 	}
@@ -799,7 +823,7 @@ func SaveUserConfig(config *UserConfig) error {
 	var buf bytes.Buffer
 
 	// Write header comment
-	if _, err := buf.WriteString("# Agent Deck Configuration\n"); err != nil {
+	if _, err := buf.WriteString("# Agent Desk Configuration\n"); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 	if _, err := buf.WriteString("# Edit this file or use Settings (press S) in the TUI\n\n"); err != nil {
@@ -924,6 +948,8 @@ func GetToolIcon(toolName string) string {
 		return "💻"
 	case "cursor":
 		return "📝"
+	case "copilot":
+		return "🐙"
 	case "shell":
 		return "🐚"
 	default:
@@ -1162,20 +1188,16 @@ func GetNotificationsSettings() NotificationsConfig {
 	config, err := LoadUserConfig()
 	if err != nil || config == nil {
 		return NotificationsConfig{
-			Enabled:  true,
+			Enabled:  false,
 			MaxShown: 6,
 		}
 	}
 
+	// The notification/quick-switch bar defaults OFF. (The old "unset" heuristic
+	// keyed on zero-values, which couldn't distinguish an explicit `enabled =
+	// false` from an absent section — so it silently re-enabled a config that
+	// deliberately turned it off.) An explicit `enabled = true` still turns it on.
 	settings := config.Notifications
-
-	// Apply defaults for unset values
-	// Enabled defaults to true for better UX (users expect to see waiting sessions)
-	// Users who have a config file but no [notifications] section get enabled=true
-	if !settings.Enabled && settings.MaxShown == 0 {
-		// Section not explicitly configured, apply default
-		settings.Enabled = true
-	}
 	if settings.MaxShown <= 0 {
 		settings.MaxShown = 6
 	}
@@ -1283,7 +1305,7 @@ func CreateExampleConfig() error {
 		return nil
 	}
 
-	exampleConfig := `# Agent Deck User Configuration
+	exampleConfig := `# Agent Desk User Configuration
 # This file is loaded on startup. Edit to customize tools and MCPs.
 
 # Default AI tool for new sessions
@@ -1318,7 +1340,7 @@ func CreateExampleConfig() error {
 # yolo_mode = true
 
 # Log file management
-# Agent-deck logs session output to ~/.agent-deck/logs/ for status detection
+# Agent-deck logs session output to ~/.agent-desk/logs/ for status detection
 # These settings control automatic log maintenance to prevent disk bloat
 [logs]
 # Maximum log file size in MB before truncation (default: 10)
@@ -1340,7 +1362,7 @@ check_interval_hours = 24
 # Show update notification in CLI commands, not just TUI (default: true)
 notify_in_cli = true
 
-# Experiments (for 'agent-deck try' command)
+# Experiments (for 'agent-desk try' command)
 # Quick experiment folder management with auto-dated directories
 [experiments]
 # Base directory for experiments (default: ~/src/tries)
@@ -1358,8 +1380,13 @@ default_location = "sibling"
 # Automatically remove worktree when session is deleted
 auto_cleanup = true
 # Custom path template (overrides default_location if set)
-# Variables: {repo-name}, {repo-root}, {branch}, {session-id}
+# Variables: {repo-name}, {repo-root}, {session-id},
+#   {branch} (sanitized, human-friendly) or {branch-escaped} (collision-resistant)
 # path_template = "../worktrees/{repo-name}/{branch}"
+# Prefix for auto-generated branch names from the session name (New Session dialog).
+# e.g. "feature/" turns a session named "dark mode" into branch "feature/dark-mode".
+# Set to "" to disable prefixing. Default: "feature/"
+# branch_prefix = "feature/"
 
 # Default scope for MCP operations: "local", "global", or "user"
 # "local" writes to .mcp.json (project-only, default)
@@ -1368,11 +1395,11 @@ auto_cleanup = true
 # mcp_default_scope = "local"
 
 # Tmux session settings
-# Controls how agent-deck configures tmux sessions
+# Controls how agent-desk configures tmux sessions
 # [tmux]
-# inject_status_line controls whether agent-deck sets up a custom tmux status bar
+# inject_status_line controls whether agent-desk sets up a custom tmux status bar
 # When false, your existing tmux status line configuration is preserved
-# Default: true (agent-deck injects its own status bar with session info)
+# Default: true (agent-desk injects its own status bar with session info)
 # inject_status_line = false
 # Override tmux options applied to every session (applied after defaults)
 # options = { "allow-passthrough" = "all", "history-limit" = "50000" }
@@ -1446,7 +1473,7 @@ auto_cleanup = true
 
 # ---------- HTTP MCP with Auto-Start Server ----------
 # For MCPs that need a local server process (e.g., piekstra/slack-mcp-server),
-# add a [mcps.NAME.server] block to have agent-deck auto-start the server.
+# add a [mcps.NAME.server] block to have agent-desk auto-start the server.
 
 # Example: Slack MCP with auto-start server
 # [mcps.slack]
