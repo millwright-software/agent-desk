@@ -436,6 +436,14 @@ func NewInstanceWithTool(title, projectPath, tool string) *Instance {
 	// Claude session ID will be detected from files Claude creates
 	// No pre-assignment needed
 
+	// Copilot mis-detects dark terminals (its background query is swallowed by
+	// tmux) and prints dark text, so default it to a light pane for readability.
+	// Persisted like any explicit choice; override with `c`.
+	if tool == "copilot" {
+		inst.ColorScheme = CopilotDefaultColorScheme
+		applyColorSchemeToTmux(tmuxSess, inst.ColorScheme)
+	}
+
 	return inst
 }
 

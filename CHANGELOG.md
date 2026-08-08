@@ -9,6 +9,17 @@ upstream; this file tracks changes made in the fork. The format follows
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-07
+
+### Added
+- **Light color schemes** (`Paper`, `Daylight`, `Linen`) selectable with `c`, alongside the existing dark presets.
+
+### Fixed
+- **Copilot text unreadable (dark-on-dark).** Copilot CLI mis-detects a dark terminal — its background-detection
+  query is swallowed inside tmux — so it renders as if on a light terminal and prints dark text. Rather than
+  fight its detection, new Copilot sessions now default to a **light pane** (`Paper`), so Copilot's dark text is
+  readable. Change it per session with `c`; for an existing Copilot session, press `c` and pick a light scheme.
+
 ## [1.0.0] - 2026-08-06
 
 First tagged release of the Millwright Software fork.

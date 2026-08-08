@@ -12,7 +12,10 @@ import (
 // surfaces.
 //
 // Bg/Fg are the pane colors. Accent is used for the tmux status bar foreground
-// and the preview/sidebar accent in the TUI. All presets are dark-friendly.
+// and the preview/sidebar accent in the TUI. Most presets are dark; a few light
+// presets exist for tools that render as if on a light terminal (notably GitHub
+// Copilot CLI, which prints dark text — giving it a light pane makes that text
+// readable; see CopilotDefaultColorScheme).
 // (Empty Bg+Fg is reserved to mean "inherit the terminal's own colors", but no
 // preset currently uses it.)
 type ColorScheme struct {
@@ -42,7 +45,19 @@ var ColorSchemes = []ColorScheme{
 	{Name: "Cosmos", Bg: "#242350", Fg: "#d8d4f2", Accent: "#8a7bf0"},   // indigo
 	{Name: "Mulberry", Bg: "#3a2038", Fg: "#f0d4ea", Accent: "#ff6fd0"}, // magenta
 	{Name: "Slate", Bg: "#2b3340", Fg: "#d6dde8", Accent: "#8fb3d9"},    // neutral steel
+
+	// Light presets — for tools that print dark text (e.g. Copilot CLI). Dark fg
+	// on a light bg, with a dark accent readable on the light status bar.
+	{Name: "Paper", Bg: "#f7f7f2", Fg: "#22262b", Accent: "#b25000"},    // warm-neutral near-white
+	{Name: "Daylight", Bg: "#eaf1fb", Fg: "#17222e", Accent: "#215a9e"}, // cool light blue
+	{Name: "Linen", Bg: "#f6efe0", Fg: "#33291a", Accent: "#916200"},    // warm cream
 }
+
+// CopilotDefaultColorScheme is the light preset applied to new Copilot sessions.
+// Copilot CLI mis-detects dark terminals (especially inside tmux, where its
+// background-detection query is swallowed) and prints dark text, so a light pane
+// keeps that text readable out of the box. Users can change it with `c`.
+const CopilotDefaultColorScheme = "Paper"
 
 // ColorSchemeByName returns the scheme with the given name (case-insensitive).
 // An empty name resolves to the Default scheme. Unknown names also fall back to
