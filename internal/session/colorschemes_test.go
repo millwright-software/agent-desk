@@ -1,6 +1,24 @@
 package session
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
+
+// isLightHex reports whether a "#rrggbb" color is light (perceived luminance
+// above the midpoint). Used to assert light presets really are light.
+func isLightHex(hex string) bool {
+	if len(hex) != 7 || hex[0] != '#' {
+		return false
+	}
+	v := func(s string) float64 {
+		n, _ := strconv.ParseInt(s, 16, 0)
+		return float64(n)
+	}
+	r, g, b := v(hex[1:3]), v(hex[3:5]), v(hex[5:7])
+	// Rec. 601 luma.
+	return (0.299*r + 0.587*g + 0.114*b) > 140
+}
 
 func TestColorSchemeByName(t *testing.T) {
 	tests := []struct {
@@ -48,18 +66,35 @@ func TestColorSchemeStyles(t *testing.T) {
 	}
 }
 
-// TestColorSchemesAllDark guards Eric's requirement: every preset is dark-friendly
-// (real background set, never the light/inherit case).
-func TestColorSchemesAllDark(t *testing.T) {
+// TestColorSchemesWellFormed guards that every preset defines Bg/Fg/Accent, the
+// first scheme is the (dark) default, and at least one light preset exists for
+// Copilot-style tools — including the one CopilotDefaultColorScheme points at.
+func TestColorSchemesWellFormed(t *testing.T) {
 	if ColorSchemes[0].Name != DefaultColorSchemeName {
 		t.Errorf("ColorSchemes[0] = %q, must equal DefaultColorSchemeName %q",
 			ColorSchemes[0].Name, DefaultColorSchemeName)
 	}
+	lightCount := 0
 	for _, cs := range ColorSchemes {
 		if cs.Bg == "" || cs.Fg == "" || cs.Accent == "" {
 			t.Errorf("scheme %q must define Bg/Fg/Accent (got bg=%q fg=%q accent=%q)",
 				cs.Name, cs.Bg, cs.Fg, cs.Accent)
 		}
+		if isLightHex(cs.Bg) {
+			lightCount++
+		}
+	}
+	if lightCount == 0 {
+		t.Error("expected at least one light preset for Copilot-style tools")
+	}
+	// The default is dark; the Copilot default is one of the light presets and
+	// must resolve to a real, non-fallback scheme.
+	if isLightHex(ColorSchemeByName("").Bg) {
+		t.Error("default scheme must be dark")
+	}
+	if got := ColorSchemeByName(CopilotDefaultColorScheme); got.Name != CopilotDefaultColorScheme {
+		t.Errorf("CopilotDefaultColorScheme %q does not resolve to a real scheme (got %q)",
+			CopilotDefaultColorScheme, got.Name)
 	}
 }
 

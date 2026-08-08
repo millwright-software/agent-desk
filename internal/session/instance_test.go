@@ -1192,6 +1192,27 @@ func TestBuildCopilotCommand(t *testing.T) {
 	}
 }
 
+// TestNewCopilotSessionDefaultsToLightScheme guards the Copilot readability
+// workaround: Copilot prints dark text (it mis-detects dark terminals), so new
+// Copilot sessions default to a light pane. Other tools take no scheme.
+func TestNewCopilotSessionDefaultsToLightScheme(t *testing.T) {
+	cop := NewInstanceWithTool("cop", "/tmp/cop", "copilot")
+	if cop.ColorScheme != CopilotDefaultColorScheme {
+		t.Errorf("new copilot ColorScheme = %q, want %q", cop.ColorScheme, CopilotDefaultColorScheme)
+	}
+	// The default must actually be a light scheme (dark fg on light bg), or the
+	// workaround is pointless.
+	cs := ColorSchemeByName(cop.ColorScheme)
+	if !isLightHex(cs.Bg) {
+		t.Errorf("CopilotDefaultColorScheme %q bg %q is not light", cop.ColorScheme, cs.Bg)
+	}
+
+	cl := NewInstanceWithTool("cl", "/tmp/cl", "claude")
+	if cl.ColorScheme != "" {
+		t.Errorf("new claude ColorScheme = %q, want \"\" (no forced scheme)", cl.ColorScheme)
+	}
+}
+
 func TestBuildGeminiCommand(t *testing.T) {
 	inst := NewInstanceWithTool("test", "/tmp/test", "gemini")
 
