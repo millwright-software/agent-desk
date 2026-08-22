@@ -286,6 +286,7 @@ type Home struct {
 	// Notification bar (tmux status-left for waiting sessions)
 	notificationManager  *session.NotificationManager
 	notificationsEnabled bool
+	bellEnabled          bool // ring terminal bell when a session enters "waiting"
 	boundKeys            map[string]string // Track which key is bound (key -> "sessionID:tmuxName")
 	boundKeysMu          sync.Mutex        // Protects boundKeys for background worker access
 	lastBarText          string            // Cache to avoid updating all sessions every tick
@@ -586,6 +587,8 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// Initialize notification manager if enabled in config
 	// All instances manage the notification bar (they share SQLite state, so produce identical output)
 	notifSettings := session.GetNotificationsSettings()
+	// Attention bell is independent of the visual notification bar and defaults on.
+	h.bellEnabled = notifSettings.BellEnabled()
 	if notifSettings.Enabled {
 		h.notificationsEnabled = true
 		h.notificationManager = session.NewNotificationManager(notifSettings.MaxShown)
@@ -1644,6 +1647,20 @@ func (h *Home) logWorker() {
 }
 
 // backgroundStatusUpdate runs independently of the TUI
+// ringTerminalBell writes a BEL to the controlling terminal so the user hears
+// their terminal's bell when a background session needs attention. BEL is a
+// non-printing control character, so it neither disturbs the TUI nor an attached
+// tmux session. Writing to /dev/tty reaches the user whether they're on the
+// dashboard or attached inside a session (tea.Exec); stderr is a fallback.
+func ringTerminalBell() {
+	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+		_, _ = tty.WriteString("\a")
+		_ = tty.Close()
+		return
+	}
+	_, _ = fmt.Fprint(os.Stderr, "\a")
+}
+
 // Updates session statuses and syncs notification bar directly to tmux
 // This is called by the internal ticker even when TUI is paused (tea.Exec)
 func (h *Home) backgroundStatusUpdate() {
@@ -1702,6 +1719,7 @@ func (h *Home) backgroundStatusUpdate() {
 	// With PipeManager, skip sessions idle for >5s (no %output events = no status change)
 	statusStart := time.Now()
 	var statusChanged atomic.Bool
+	var needsBell atomic.Bool // a session newly entered "waiting" this tick
 	var slowMu sync.Mutex
 	var slowSessions []string
 	pm := tmux.GetPipeManager()
@@ -1740,11 +1758,20 @@ func (h *Home) backgroundStatusUpdate() {
 			if newStatus != oldStatus {
 				statusChanged.Store(true)
 				notifLog.Debug("status_changed", slog.String("title", inst.Title), slog.String("old", string(oldStatus)), slog.String("new", string(newStatus)))
+				// Ring once when a session flips INTO waiting (needs attention).
+				if newStatus == session.StatusWaiting && oldStatus != session.StatusWaiting {
+					needsBell.Store(true)
+				}
 			}
 			return nil
 		})
 	}
 	_ = g.Wait() // Errors are logged within each goroutine
+
+	// One bell per tick, regardless of how many sessions transitioned.
+	if h.bellEnabled && needsBell.Load() {
+		ringTerminalBell()
+	}
 
 	statusDur := time.Since(statusStart)
 	if skipped > 0 {
@@ -2311,13 +2338,24 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Track as launching for animation
 			h.launchingSessions[msg.instance.ID] = time.Now()
 
+			// Capture the row highlighted before this session was created so we
+			// can drop the new session directly below it (cursor/flatItems are
+			// still the pre-add view at this point).
+			anchorSessionID := ""
+			if h.cursor >= 0 && h.cursor < len(h.flatItems) {
+				if it := h.flatItems[h.cursor]; it.Type == session.ItemTypeSession && it.Session != nil {
+					anchorSessionID = it.Session.ID
+				}
+			}
+
 			// Expand the group so the session is visible
 			if msg.instance.GroupPath != "" {
 				h.groupTree.ExpandGroupWithParents(msg.instance.GroupPath)
 			}
 
-			// Add to existing group tree instead of rebuilding
-			h.groupTree.AddSession(msg.instance)
+			// Add to existing group tree, placed directly below the highlighted
+			// row (falls back to append when there's no same-group anchor).
+			h.groupTree.AddSessionAfter(msg.instance, anchorSessionID)
 			h.rebuildFlatItems()
 			h.search.SetItems(h.instances)
 

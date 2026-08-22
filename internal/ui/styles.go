@@ -20,44 +20,46 @@ var currentTheme Theme = ThemeDark
 
 // Dark Theme - Tokyo Night
 var darkColors = struct {
-	Bg, Surface, Border, Text, TextDim  lipgloss.Color
-	Accent, Purple, Cyan, Green, Yellow lipgloss.Color
-	Orange, Red, Comment                lipgloss.Color
+	Bg, Surface, Border, Text, TextDim   lipgloss.Color
+	Accent, Purple, Cyan, Green, GreenDim lipgloss.Color
+	Yellow, Orange, Red, Comment          lipgloss.Color
 }{
-	Bg:      lipgloss.Color("#1a1b26"),
-	Surface: lipgloss.Color("#24283b"),
-	Border:  lipgloss.Color("#414868"),
-	Text:    lipgloss.Color("#c0caf5"),
-	TextDim: lipgloss.Color("#787fa0"),
-	Accent:  lipgloss.Color("#7aa2f7"),
-	Purple:  lipgloss.Color("#bb9af7"),
-	Cyan:    lipgloss.Color("#7dcfff"),
-	Green:   lipgloss.Color("#9ece6a"),
-	Yellow:  lipgloss.Color("#e0af68"),
-	Orange:  lipgloss.Color("#ff9e64"),
-	Red:     lipgloss.Color("#f7768e"),
-	Comment: lipgloss.Color("#787fa0"),
+	Bg:       lipgloss.Color("#1a1b26"),
+	Surface:  lipgloss.Color("#24283b"),
+	Border:   lipgloss.Color("#414868"),
+	Text:     lipgloss.Color("#c0caf5"),
+	TextDim:  lipgloss.Color("#787fa0"),
+	Accent:   lipgloss.Color("#7aa2f7"),
+	Purple:   lipgloss.Color("#bb9af7"),
+	Cyan:     lipgloss.Color("#7dcfff"),
+	Green:    lipgloss.Color("#9ece6a"), // bright: needs attention / not yet looked at
+	GreenDim: lipgloss.Color("#6f9a4e"), // dimmer: seen, reply still owed (unread bookmark)
+	Yellow:   lipgloss.Color("#e0af68"),
+	Orange:   lipgloss.Color("#ff9e64"),
+	Red:      lipgloss.Color("#f7768e"),
+	Comment:  lipgloss.Color("#787fa0"),
 }
 
 // Light Theme - Tokyo Night Light variant
 var lightColors = struct {
-	Bg, Surface, Border, Text, TextDim  lipgloss.Color
-	Accent, Purple, Cyan, Green, Yellow lipgloss.Color
-	Orange, Red, Comment                lipgloss.Color
+	Bg, Surface, Border, Text, TextDim   lipgloss.Color
+	Accent, Purple, Cyan, Green, GreenDim lipgloss.Color
+	Yellow, Orange, Red, Comment          lipgloss.Color
 }{
-	Bg:      lipgloss.Color("#d5d6db"),
-	Surface: lipgloss.Color("#e9e9ec"),
-	Border:  lipgloss.Color("#9699a3"),
-	Text:    lipgloss.Color("#343b58"),
-	TextDim: lipgloss.Color("#6a6d7c"),
-	Accent:  lipgloss.Color("#34548a"),
-	Purple:  lipgloss.Color("#7847bd"),
-	Cyan:    lipgloss.Color("#166775"),
-	Green:   lipgloss.Color("#485e30"),
-	Yellow:  lipgloss.Color("#8f5e15"),
-	Orange:  lipgloss.Color("#965027"),
-	Red:     lipgloss.Color("#8c4351"),
-	Comment: lipgloss.Color("#6a6d7c"),
+	Bg:       lipgloss.Color("#d5d6db"),
+	Surface:  lipgloss.Color("#e9e9ec"),
+	Border:   lipgloss.Color("#9699a3"),
+	Text:     lipgloss.Color("#343b58"),
+	TextDim:  lipgloss.Color("#6a6d7c"),
+	Accent:   lipgloss.Color("#34548a"),
+	Purple:   lipgloss.Color("#7847bd"),
+	Cyan:     lipgloss.Color("#166775"),
+	Green:    lipgloss.Color("#485e30"), // bright: needs attention / not yet looked at
+	GreenDim: lipgloss.Color("#33461f"), // dimmer: seen, reply still owed (unread bookmark)
+	Yellow:   lipgloss.Color("#8f5e15"),
+	Orange:   lipgloss.Color("#965027"),
+	Red:      lipgloss.Color("#8c4351"),
+	Comment:  lipgloss.Color("#6a6d7c"),
 }
 
 // Active color variables (set by InitTheme)
@@ -68,10 +70,11 @@ var (
 	ColorText    lipgloss.Color
 	ColorTextDim lipgloss.Color
 	ColorAccent  lipgloss.Color
-	ColorPurple  lipgloss.Color
-	ColorCyan    lipgloss.Color
-	ColorGreen   lipgloss.Color
-	ColorYellow  lipgloss.Color
+	ColorPurple   lipgloss.Color
+	ColorCyan     lipgloss.Color
+	ColorGreen    lipgloss.Color
+	ColorGreenDim lipgloss.Color
+	ColorYellow   lipgloss.Color
 	ColorOrange  lipgloss.Color
 	ColorRed     lipgloss.Color
 	ColorComment lipgloss.Color
@@ -97,6 +100,7 @@ func InitTheme(theme string) {
 		ColorPurple = lightColors.Purple
 		ColorCyan = lightColors.Cyan
 		ColorGreen = lightColors.Green
+		ColorGreenDim = lightColors.GreenDim
 		ColorYellow = lightColors.Yellow
 		ColorOrange = lightColors.Orange
 		ColorRed = lightColors.Red
@@ -112,6 +116,7 @@ func InitTheme(theme string) {
 		ColorPurple = darkColors.Purple
 		ColorCyan = darkColors.Cyan
 		ColorGreen = darkColors.Green
+		ColorGreenDim = darkColors.GreenDim
 		ColorYellow = darkColors.Yellow
 		ColorOrange = darkColors.Orange
 		ColorRed = darkColors.Red
@@ -493,12 +498,12 @@ func initStyles() {
 
 	// Session status indicator styles
 	SessionStatusRunning = lipgloss.NewStyle().Foreground(ColorYellow) // processing
-	SessionStatusWaiting = lipgloss.NewStyle().Foreground(ColorGreen)  // done, awaiting user
+	SessionStatusWaiting = lipgloss.NewStyle().Foreground(ColorGreen)  // done, awaiting user (bright: not yet looked at)
 	SessionStatusIdle = lipgloss.NewStyle().Foreground(ColorTextDim)
 	SessionStatusError = lipgloss.NewStyle().Foreground(ColorRed)
 	SessionStatusParked = lipgloss.NewStyle().Foreground(ColorRed).Faint(true)        // parked (dim red)
 	SessionStatusParkedBlue = lipgloss.NewStyle().Foreground(ColorAccent).Faint(true) // parked (dim blue)
-	SessionStatusUnread = lipgloss.NewStyle().Foreground(ColorGreen)                  // unread bookmark (bright green)
+	SessionStatusUnread = lipgloss.NewStyle().Foreground(ColorGreenDim)               // unread bookmark (dimmer green: seen, reply owed)
 	SessionStatusSelStyle = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorAccent)
 
 	// Session title styles by state

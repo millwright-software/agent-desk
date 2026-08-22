@@ -760,6 +760,105 @@ func TestAddSession(t *testing.T) {
 	}
 }
 
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sessionOrder returns the session IDs in a group's current slice order.
+func sessionOrder(t *GroupTree, groupPath string) []string {
+	g := t.Groups[groupPath]
+	if g == nil {
+		return nil
+	}
+	ids := make([]string, len(g.Sessions))
+	for i, s := range g.Sessions {
+		ids[i] = s.ID
+	}
+	return ids
+}
+
+// flattenSessionOrder returns the session IDs in displayed (flattened) order.
+func flattenSessionOrder(t *GroupTree) []string {
+	var ids []string
+	for _, it := range t.Flatten() {
+		if it.Type == ItemTypeSession && it.Session != nil {
+			ids = append(ids, it.Session.ID)
+		}
+	}
+	return ids
+}
+
+func TestAddSessionAfter(t *testing.T) {
+	newTree := func() *GroupTree {
+		tree := NewGroupTree([]*Instance{})
+		tree.CreateGroup("test")
+		tree.AddSession(&Instance{ID: "a", GroupPath: "test"})
+		tree.AddSession(&Instance{ID: "b", GroupPath: "test"})
+		tree.AddSession(&Instance{ID: "c", GroupPath: "test"})
+		return tree
+	}
+
+	t.Run("inserts directly after the anchor", func(t *testing.T) {
+		tree := newTree()
+		tree.AddSessionAfter(&Instance{ID: "n", GroupPath: "test"}, "b")
+		if got, want := sessionOrder(tree, "test"), []string{"a", "b", "n", "c"}; !equalStrings(got, want) {
+			t.Errorf("order = %v, want %v", got, want)
+		}
+		// Order must be renormalized to match slice position so it persists.
+		for i, s := range tree.Groups["test"].Sessions {
+			if s.Order != i {
+				t.Errorf("session %q Order = %d, want %d", s.ID, s.Order, i)
+			}
+		}
+	})
+
+	t.Run("appends when anchor is the last row", func(t *testing.T) {
+		tree := newTree()
+		tree.AddSessionAfter(&Instance{ID: "n", GroupPath: "test"}, "c")
+		if got, want := sessionOrder(tree, "test"), []string{"a", "b", "c", "n"}; !equalStrings(got, want) {
+			t.Errorf("order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("falls back to append when afterID is empty", func(t *testing.T) {
+		tree := newTree()
+		tree.AddSessionAfter(&Instance{ID: "n", GroupPath: "test"}, "")
+		if got, want := sessionOrder(tree, "test"), []string{"a", "b", "c", "n"}; !equalStrings(got, want) {
+			t.Errorf("order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("falls back to append when anchor is in another group", func(t *testing.T) {
+		tree := newTree()
+		tree.CreateGroup("other")
+		tree.AddSession(&Instance{ID: "x", GroupPath: "other"})
+		tree.AddSessionAfter(&Instance{ID: "n", GroupPath: "test"}, "x")
+		if got, want := sessionOrder(tree, "test"), []string{"a", "b", "c", "n"}; !equalStrings(got, want) {
+			t.Errorf("order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("new top-level session lands after the anchor's forks in display order", func(t *testing.T) {
+		tree := newTree()
+		// Give "a" a fork (sub-session nested under it).
+		tree.AddSession(&Instance{ID: "a1", GroupPath: "test", ParentSessionID: "a"})
+		// Insert a new top-level session below the highlighted "a".
+		tree.AddSessionAfter(&Instance{ID: "n", GroupPath: "test"}, "a")
+		// Flatten nests a1 under a, so display order is a, a1, n, b, c.
+		if got, want := flattenSessionOrder(tree), []string{"a", "a1", "n", "b", "c"}; !equalStrings(got, want) {
+			t.Errorf("display order = %v, want %v", got, want)
+		}
+	})
+}
+
 func TestRemoveSession(t *testing.T) {
 	instances := []*Instance{
 		{ID: "1", Title: "session-1", GroupPath: "test"},

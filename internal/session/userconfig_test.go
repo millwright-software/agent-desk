@@ -8,6 +8,47 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+func TestNotificationsBellEnabled(t *testing.T) {
+	// Unset (absent config) => bell on by default.
+	if !(NotificationsConfig{}).BellEnabled() {
+		t.Error("BellEnabled() with unset Bell should default to true")
+	}
+	// Explicit false => off.
+	off := false
+	if (NotificationsConfig{Bell: &off}).BellEnabled() {
+		t.Error("BellEnabled() with Bell=false should be false")
+	}
+	// Explicit true => on.
+	on := true
+	if !(NotificationsConfig{Bell: &on}).BellEnabled() {
+		t.Error("BellEnabled() with Bell=true should be true")
+	}
+}
+
+// Round-trips an explicit `bell = false` through TOML to confirm the pointer
+// distinguishes "absent" (default on) from "explicitly off".
+func TestNotificationsBellTOMLRoundTrip(t *testing.T) {
+	var cfg struct {
+		Notifications NotificationsConfig `toml:"notifications"`
+	}
+	if _, err := toml.Decode("[notifications]\nbell = false\n", &cfg); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if cfg.Notifications.BellEnabled() {
+		t.Error("explicit bell=false should disable the bell")
+	}
+
+	var empty struct {
+		Notifications NotificationsConfig `toml:"notifications"`
+	}
+	if _, err := toml.Decode("[notifications]\nmax_shown = 4\n", &empty); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !empty.Notifications.BellEnabled() {
+		t.Error("absent bell key should default the bell on")
+	}
+}
+
 func TestUserConfig_ClaudeConfigDir(t *testing.T) {
 	// Create temp config file
 	tmpDir := t.TempDir()
