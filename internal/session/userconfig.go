@@ -267,6 +267,18 @@ type NotificationsConfig struct {
 
 	// MaxShown is the maximum number of sessions shown in the bar (default: 6)
 	MaxShown int `toml:"max_shown"`
+
+	// Bell rings the terminal bell (BEL) once when a session transitions to
+	// "waiting" (needs your attention). Pointer so an absent config defaults to
+	// on while an explicit `bell = false` turns it off. Independent of Enabled
+	// (the visual notification bar).
+	Bell *bool `toml:"bell"`
+}
+
+// BellEnabled reports whether the attention bell should ring. Defaults to true
+// when unset in config.
+func (c NotificationsConfig) BellEnabled() bool {
+	return c.Bell == nil || *c.Bell
 }
 
 // InstanceSettings configures multiple agent-desk instance behavior

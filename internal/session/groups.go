@@ -952,6 +952,64 @@ func (t *GroupTree) AddSession(inst *Instance) {
 	t.updateGroupDefaultPath(groupPath)
 }
 
+// AddSessionAfter adds a session, then positions it immediately after the
+// session with id afterID within the same group, so it renders directly below
+// that (highlighted) row. It falls back to AddSession's append position when
+// afterID is empty, refers to a session in a different group, or isn't found.
+//
+// Flatten orders top-level sessions by their slice position and nests
+// sub-sessions under their parent, so inserting the new session right after the
+// anchor's slice index renders it directly below the anchor's row and any of the
+// anchor's forks — regardless of whether the anchor is a top-level session or a
+// sub-session. Order is renormalized for the whole group so the placement
+// persists.
+func (t *GroupTree) AddSessionAfter(inst *Instance, afterID string) {
+	t.AddSession(inst) // full bookkeeping; appends to the end of inst's group
+
+	if afterID == "" || afterID == inst.ID {
+		return
+	}
+
+	groupPath := inst.GroupPath
+	if groupPath == "" {
+		groupPath = DefaultGroupPath
+	}
+	group, exists := t.Groups[groupPath]
+	if !exists {
+		return
+	}
+
+	anchor, cur := -1, -1
+	for i, s := range group.Sessions {
+		if s.ID == afterID {
+			anchor = i
+		}
+		if s.ID == inst.ID {
+			cur = i
+		}
+	}
+	// anchor < 0 => highlighted row is in another group (or not a session):
+	// leave the new session appended, matching AddSession.
+	if anchor < 0 || cur < 0 {
+		return
+	}
+
+	// Remove the just-appended session (cur is the last element) and re-insert
+	// it directly after the anchor.
+	s := group.Sessions[cur]
+	group.Sessions = append(group.Sessions[:cur], group.Sessions[cur+1:]...)
+	insertAt := anchor + 1
+	if insertAt > len(group.Sessions) {
+		insertAt = len(group.Sessions)
+	}
+	group.Sessions = append(group.Sessions[:insertAt], append([]*Instance{s}, group.Sessions[insertAt:]...)...)
+
+	// Renormalize Order for the group (same idiom as moveSession).
+	for i, s := range group.Sessions {
+		s.Order = i
+	}
+}
+
 // RemoveSession removes a session from its group
 func (t *GroupTree) RemoveSession(inst *Instance) {
 	groupPath := inst.GroupPath

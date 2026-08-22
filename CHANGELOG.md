@@ -9,6 +9,22 @@ upstream; this file tracks changes made in the fork. The format follows
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-08-22
+
+### Added
+- **Attention bell.** Rings the terminal bell once when any session transitions into "waiting" (needs your
+  input) — so you hear it even while attached to another session or looking away. One ring per poll regardless
+  of how many sessions transition. On by default; disable with `bell = false` under `[notifications]` in
+  `~/.agent-desk/config.toml`.
+
+### Changed
+- **New sessions are inserted directly below the highlighted row** instead of at the bottom of the group. The
+  position persists (renormalized `Order`), and falls back to appending when there's no same-group anchor.
+  Forking is unchanged (forks already nest under their parent).
+- **Distinct greens for the two "green" states.** "Needs attention / not yet looked at" (waiting) stays bright
+  green; the `u` unread bookmark ("seen it, reply still owed") is now a dimmer green — they were previously the
+  same color and indistinguishable.
+
 ## [1.0.3] - 2026-08-07
 
 ### Added
