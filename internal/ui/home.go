@@ -3507,7 +3507,10 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 
-			repoRoot, err := git.GetRepoRoot(path)
+			// Base off the MAIN repo root, de-nesting if `path` is itself a
+			// worktree — otherwise subdirectory mode would create a worktree
+			// inside a worktree (.worktrees nested in .worktrees).
+			repoRoot, err := git.GetWorktreeBaseRoot(path)
 			if err != nil {
 				h.newDialog.SetError(fmt.Sprintf("Failed to get repo root: %v", err))
 				return h, nil
@@ -4620,7 +4623,9 @@ func (h *Home) handleForkDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						h.forkDialog.SetError("Path is not a git repository")
 						return h, nil
 					}
-					repoRoot, err := git.GetRepoRoot(source.ProjectPath)
+					// De-nest: base off the main repo root even when forking a
+					// session that itself lives in a worktree.
+					repoRoot, err := git.GetWorktreeBaseRoot(source.ProjectPath)
 					if err != nil {
 						h.forkDialog.SetError(fmt.Sprintf("Failed to get repo root: %v", err))
 						return h, nil

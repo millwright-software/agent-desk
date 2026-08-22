@@ -9,6 +9,22 @@ upstream; this file tracks changes made in the fork. The format follows
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-22
+
+### Fixed
+- **Worktrees no longer nest inside worktrees.** Creating a new session (or forking) while the base directory
+  was itself a git worktree produced `.worktrees/` inside a worktree, because the base resolved to the
+  worktree's own root. New worktrees now always base off the **main repo root** (de-nested via
+  `GetWorktreeBaseRoot`).
+
+### Changed
+- **New Session worktree UX is a single name.** Removed the separate branch field: the session name is the one
+  input, and it fills both the branch and the worktree folder — identical, sanitized, and **lowercased**
+  (e.g. "Auth Refactor" → folder `auth-refactor`, branch `auth-refactor`, no prefix).
+- **The dialog now shows the full resolved worktree path** (de-nested, `~`-collapsed) and the derived branch,
+  live as you type — so you can see exactly where the worktree will land before creating it. Says so when the
+  selected path isn't a git repo.
+
 ## [1.0.4] - 2026-08-22
 
 ### Added

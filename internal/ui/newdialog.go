@@ -41,11 +41,13 @@ type NewDialog struct {
 	hasDefaultTool bool // true if default_tool is set in config
 	// Options collapse
 	optionsExpanded bool // false = show collapsed summary line
-	// Worktree support
+	// Worktree support. A single session name drives the branch AND the worktree
+	// folder (both = the sanitized name, identical); there is no separate branch
+	// field. The base is always the main repo root, so worktrees never nest.
 	worktreeEnabled bool
-	branchInput     textinput.Model
-	branchAutoSet   bool   // true if branch was auto-derived from session name
-	branchPrefix    string // configured prefix for auto-generated branch names ([worktree].branch_prefix)
+	wtBaseRoot      string // main-repo root for the current path (de-nested; "" if not a git repo)
+	wtLocation      string // [worktree].default_location (sibling / subdirectory / custom)
+	wtTemplate      string // [worktree].path_template ("" = built-in sibling/subdirectory)
 	// Inline validation error displayed inside the dialog
 	validationErr string
 }
@@ -87,17 +89,10 @@ func NewNewDialog() *NewDialog {
 	commandInput.CharLimit = 100
 	commandInput.Width = 40
 
-	// Create branch input for worktree
-	branchInput := textinput.New()
-	branchInput.Placeholder = "feature/branch-name"
-	branchInput.CharLimit = 100
-	branchInput.Width = 40
-
 	dlg := &NewDialog{
 		nameInput:       nameInput,
 		pathInput:       pathInput,
 		commandInput:    commandInput,
-		branchInput:     branchInput,
 		claudeOptions:   NewClaudeOptionsPanel(),
 		geminiOptions:   NewYoloOptionsPanel("Gemini", "YOLO mode - auto-approve all"),
 		codexOptions:    NewYoloOptionsPanel("Codex", "YOLO mode - bypass approvals and sandbox"),
@@ -109,7 +104,6 @@ func NewNewDialog() *NewDialog {
 		parentGroupName: "default",
 		dropdownCursor:  -1,
 		worktreeEnabled: false,
-		branchPrefix:    "feature/", // default until ShowInGroup applies config
 	}
 	dlg.updateToolOptions()
 	return dlg
@@ -142,8 +136,7 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string) {
 	d.updateToolOptions()
 	// Reset worktree fields
 	d.worktreeEnabled = false
-	d.branchInput.SetValue("")
-	d.branchAutoSet = false
+	d.wtBaseRoot = ""
 	// Set path input to group's default path if provided, otherwise use current working directory
 	if defaultPath != "" {
 		d.pathInput.SetValue(defaultPath)
@@ -157,14 +150,15 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string) {
 	// Initialize tool options from global config
 	d.geminiOptions.SetDefaults(false)
 	d.codexOptions.SetDefaults(false)
-	d.branchPrefix = "feature/" // default; overridden by config below
 	if userConfig, err := session.LoadUserConfig(); err == nil && userConfig != nil {
 		d.geminiOptions.SetDefaults(userConfig.Gemini.YoloMode)
 		d.codexOptions.SetDefaults(userConfig.Codex.YoloMode)
 		d.claudeOptions.SetDefaults(userConfig)
-		d.branchPrefix = userConfig.Worktree.Prefix()
 	}
-	d.branchInput.Placeholder = d.branchPrefix + "branch-name"
+	// Worktree location/template for the resolved-path preview.
+	wt := session.GetWorktreeSettings()
+	d.wtLocation = wt.DefaultLocation
+	d.wtTemplate = wt.Template()
 }
 
 // SetDefaultTool sets the pre-selected command based on tool name
@@ -350,26 +344,39 @@ func (d *NewDialog) GetValues() (name, path, command string) {
 	return name, path, command
 }
 
-// ToggleWorktree toggles the worktree checkbox.
-// When enabling, auto-populates the branch name from the session name.
+// ToggleWorktree toggles the worktree checkbox. When enabling, it resolves the
+// base repo root for the current path (de-nested to the main worktree) so the
+// resolved-path preview is accurate.
 func (d *NewDialog) ToggleWorktree() {
 	d.worktreeEnabled = !d.worktreeEnabled
 	if d.worktreeEnabled {
-		d.autoBranchFromName()
+		d.refreshWorktreeBaseRoot()
 	}
 }
 
-// autoBranchFromName sets the branch input to "<prefix><sanitized-session-name>"
-// if the name field is non-empty and the branch hasn't been manually edited.
-// The prefix comes from [worktree].branch_prefix (default "feature/").
-func (d *NewDialog) autoBranchFromName() {
-	name := strings.TrimSpace(d.nameInput.Value())
-	if name == "" {
+// refreshWorktreeBaseRoot resolves the main-repo root for the current path.
+// GetWorktreeBaseRoot maps a worktree path back to its primary worktree, so a
+// new worktree is always based off the main repo — never nested inside another
+// worktree. Left empty when the path isn't a git repo (preview says so).
+func (d *NewDialog) refreshWorktreeBaseRoot() {
+	path := strings.Trim(strings.TrimSpace(d.pathInput.Value()), "'\"")
+	if path == "" {
+		d.wtBaseRoot = ""
 		return
 	}
-	branch := d.branchPrefix + git.SanitizeBranchName(name)
-	d.branchInput.SetValue(branch)
-	d.branchAutoSet = true
+	if root, err := git.GetWorktreeBaseRoot(path); err == nil {
+		d.wtBaseRoot = root
+	} else {
+		d.wtBaseRoot = ""
+	}
+}
+
+// derivedBranch is the single source of truth for both the branch name and the
+// worktree folder name: the sanitized, lowercased session name (no prefix — all
+// three identical). Lowercasing here flows to the folder too, since the folder
+// name is derived from the branch.
+func (d *NewDialog) derivedBranch() string {
+	return strings.ToLower(git.SanitizeBranchName(strings.TrimSpace(d.nameInput.Value())))
 }
 
 // IsWorktreeEnabled returns whether worktree mode is enabled
@@ -377,13 +384,13 @@ func (d *NewDialog) IsWorktreeEnabled() bool {
 	return d.worktreeEnabled
 }
 
-// GetValuesWithWorktree returns all values including worktree settings
+// GetValuesWithWorktree returns all values including worktree settings. The
+// branch is always the sanitized session name (which also becomes the worktree
+// folder name — all three identical).
 func (d *NewDialog) GetValuesWithWorktree() (name, path, command, branch string, worktreeEnabled bool) {
 	name, path, command = d.GetValues()
-	branch = strings.TrimSpace(d.branchInput.Value())
-	// Fall back to the auto-derived branch if the field was left empty.
-	if branch == "" && d.worktreeEnabled && name != "" {
-		branch = d.branchPrefix + git.SanitizeBranchName(name)
+	if d.worktreeEnabled {
+		branch = d.derivedBranch()
 	}
 	worktreeEnabled = d.worktreeEnabled
 	return
@@ -441,11 +448,11 @@ func (d *NewDialog) Validate() string {
 		return "Project path cannot be empty"
 	}
 
-	// Validate worktree branch if enabled
+	// Validate the branch derived from the session name if worktree is enabled.
 	if d.worktreeEnabled {
-		branch := strings.TrimSpace(d.branchInput.Value())
+		branch := d.derivedBranch()
 		if branch == "" {
-			return "Branch name required for worktree"
+			return "Session name needs letters or numbers to make a worktree branch"
 		}
 		if err := git.ValidateBranchName(branch); err != nil {
 			return err.Error()
@@ -466,10 +473,8 @@ func (d *NewDialog) ClearError() {
 }
 
 // optionsStartIndex returns the focus index where tool options begin.
+// Worktree adds no focus slot (it's a checkbox + derived preview, no input).
 func (d *NewDialog) optionsStartIndex() int {
-	if d.worktreeEnabled {
-		return 4 // 0=name, 1=path, 2=command, 3=branch, 4=options
-	}
 	return 3 // 0=name, 1=path, 2=command, 3=options
 }
 
@@ -491,7 +496,6 @@ func (d *NewDialog) updateFocus() {
 	d.nameInput.Blur()
 	d.pathInput.Blur()
 	d.commandInput.Blur()
-	d.branchInput.Blur()
 	d.claudeOptions.Blur()
 	d.geminiOptions.Blur()
 	d.codexOptions.Blur()
@@ -505,13 +509,7 @@ func (d *NewDialog) updateFocus() {
 		if d.commandCursor == 0 { // shell
 			d.commandInput.Focus()
 		}
-	case 3:
-		if d.worktreeEnabled {
-			d.branchInput.Focus()
-		} else if d.toolOptions != nil {
-			d.toolOptions.Focus()
-		}
-	default:
+	default: // 3+ = tool options
 		if d.toolOptions != nil {
 			d.toolOptions.Focus()
 		}
@@ -521,11 +519,8 @@ func (d *NewDialog) updateFocus() {
 // getMaxFocusIndex returns the maximum focus index based on current state
 func (d *NewDialog) getMaxFocusIndex() int {
 	max := 2 // 0=name, 1=path, 2=command/tool (reachable even when collapsed)
-	if d.worktreeEnabled {
-		max = 3 // +branch
-	}
 	if d.toolOptions != nil && d.optionsExpanded {
-		max++ // +options
+		max++ // +options (worktree adds no focus slot)
 	}
 	return max
 }
@@ -562,8 +557,6 @@ func (d *NewDialog) isTextInputFocused() bool {
 		return true
 	case 2: // command — only when shell/custom is selected and expanded
 		return d.commandCursor == 0 && d.toolExpanded
-	case 3:
-		return d.worktreeEnabled // branch input
 	}
 	return false
 }
@@ -584,6 +577,9 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 			if d.focusIndex == 1 && d.dropdownCursor >= 0 && d.dropdownCursor < len(d.dropdownItems) {
 				d.pathInput.SetValue(d.dropdownItems[d.dropdownCursor].path)
 				d.pathInput.SetCursor(len(d.pathInput.Value()))
+				if d.worktreeEnabled {
+					d.refreshWorktreeBaseRoot()
+				}
 			}
 			// Move to next field
 			d.focusIndex = d.nextFocusIndex(d.focusIndex)
@@ -644,12 +640,8 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 			// Options expanded: collapse them
 			if d.optionsExpanded && d.focusIndex >= d.optionsStartIndex() {
 				d.optionsExpanded = false
-				// Move focus back to command or branch field
-				if d.worktreeEnabled {
-					d.focusIndex = 3
-				} else {
-					d.focusIndex = 2
-				}
+				// Move focus back to the tool field
+				d.focusIndex = 2
 				d.updateFocus()
 				return d, nil
 			}
@@ -662,6 +654,9 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 				if d.dropdownCursor >= 0 && d.dropdownCursor < len(d.dropdownItems) {
 					d.pathInput.SetValue(d.dropdownItems[d.dropdownCursor].path)
 					d.pathInput.SetCursor(len(d.pathInput.Value()))
+					if d.worktreeEnabled {
+						d.refreshWorktreeBaseRoot()
+					}
 				}
 				d.focusIndex = d.nextFocusIndex(d.focusIndex)
 				d.updateFocus()
@@ -718,13 +713,10 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 		case "w":
 			// Toggle worktree when on the tool field (focusIndex == 2), whether
 			// the tool picker is expanded or collapsed. Safe to fire here because
-			// a collapsed tool field is not a focused text input.
+			// a collapsed tool field is not a focused text input. Worktree has no
+			// input field (the branch/folder derive from the name), so focus stays.
 			if d.focusIndex == 2 {
 				d.ToggleWorktree()
-				if d.worktreeEnabled {
-					d.focusIndex = 3
-					d.updateFocus()
-				}
 				return d, nil
 			}
 
@@ -752,33 +744,24 @@ func (d *NewDialog) Update(msg tea.Msg) (*NewDialog, tea.Cmd) {
 	// Update focused input
 	switch d.focusIndex {
 	case 0:
-		oldName := d.nameInput.Value()
+		// Name drives the branch + worktree folder; the preview reads it live.
 		d.nameInput, cmd = d.nameInput.Update(msg)
-		if d.worktreeEnabled && d.branchAutoSet && d.nameInput.Value() != oldName {
-			d.autoBranchFromName()
-		}
 	case 1:
 		oldValue := d.pathInput.Value()
 		d.pathInput, cmd = d.pathInput.Update(msg)
 		if d.pathInput.Value() != oldValue {
 			d.dropdownCursor = -1
 			d.computeDropdownItems()
+			// Keep the worktree base root (and its preview) in sync with the path.
+			if d.worktreeEnabled {
+				d.refreshWorktreeBaseRoot()
+			}
 		}
 	case 2:
 		if d.commandCursor == 0 && d.toolExpanded {
 			d.commandInput, cmd = d.commandInput.Update(msg)
 		}
-	case 3:
-		if d.worktreeEnabled {
-			oldBranch := d.branchInput.Value()
-			d.branchInput, cmd = d.branchInput.Update(msg)
-			if d.branchInput.Value() != oldBranch {
-				d.branchAutoSet = false
-			}
-		} else if d.toolOptions != nil && d.optionsExpanded {
-			cmd = d.toolOptions.Update(msg)
-		}
-	default:
+	default: // 3+ = tool options
 		if d.toolOptions != nil && d.optionsExpanded && d.focusIndex >= d.optionsStartIndex() {
 			cmd = d.toolOptions.Update(msg)
 		}
@@ -1037,17 +1020,30 @@ func (d *NewDialog) View() string {
 		content.WriteString(renderCheckboxLine(worktreeLabel, d.worktreeEnabled, d.focusIndex == 2))
 	}
 
-	// Branch input (only visible when worktree is enabled)
+	// Worktree preview (only when enabled): the resolved full path + branch,
+	// both derived from the session name. No input field — the name is the
+	// single source, and the path is de-nested to the main repo root.
 	if d.worktreeEnabled {
 		content.WriteString("\n")
-		if d.focusIndex == 3 {
-			content.WriteString(activeLabelStyle.Render("▶ Branch:"))
-		} else {
-			content.WriteString(labelStyle.Render("  Branch:"))
+		content.WriteString(labelStyle.Render("  Worktree:"))
+		content.WriteString("\n  ")
+		branch := d.derivedBranch()
+		switch {
+		case branch == "":
+			content.WriteString(dimStyle.Render("(type a session name)"))
+		case d.wtBaseRoot == "":
+			content.WriteString(dimStyle.Render("(selected path is not a git repository)"))
+		default:
+			target := git.WorktreePath(git.WorktreePathOptions{
+				Branch:   branch,
+				Location: d.wtLocation,
+				RepoDir:  d.wtBaseRoot,
+				Template: d.wtTemplate,
+			})
+			content.WriteString(dimStyle.Render(collapseHomePath(target)))
+			content.WriteString("\n  ")
+			content.WriteString(dimStyle.Render("branch " + branch))
 		}
-		content.WriteString("\n")
-		content.WriteString("  ")
-		content.WriteString(d.branchInput.View())
 		content.WriteString("\n")
 	}
 

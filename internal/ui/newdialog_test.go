@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/millwright-software/agent-desk/internal/git"
 )
 
 func TestNewNewDialog(t *testing.T) {
@@ -567,84 +569,66 @@ func TestNewDialog_IsWorktreeEnabled(t *testing.T) {
 func TestNewDialog_GetValuesWithWorktree(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.worktreeEnabled = true
-	dialog.branchInput.SetValue("feature/test")
-	dialog.nameInput.SetValue("test-session")
+	dialog.nameInput.SetValue("My Feature")
 	dialog.pathInput.SetValue("/tmp/project")
 
-	name, path, command, branch, enabled := dialog.GetValuesWithWorktree()
+	name, path, _, branch, enabled := dialog.GetValuesWithWorktree()
 
 	if !enabled {
 		t.Error("worktreeEnabled should be true")
 	}
-	if branch != "feature/test" {
-		t.Errorf("Branch: got %q, want %q", branch, "feature/test")
+	// Branch is derived from the session name (single source; no prefix; lowercased).
+	if want := strings.ToLower(git.SanitizeBranchName("My Feature")); branch != want {
+		t.Errorf("Branch: got %q, want %q (derived from name)", branch, want)
 	}
-	if name != "test-session" {
-		t.Errorf("Name: got %q, want %q", name, "test-session")
+	if name != "My Feature" {
+		t.Errorf("Name: got %q, want %q", name, "My Feature")
 	}
 	if path != "/tmp/project" {
 		t.Errorf("Path: got %q, want %q", path, "/tmp/project")
 	}
-	_ = command
 }
 
 func TestNewDialog_GetValuesWithWorktree_Disabled(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.worktreeEnabled = false
-	dialog.branchInput.SetValue("feature/test")
+	dialog.nameInput.SetValue("test-session")
 
 	_, _, _, branch, enabled := dialog.GetValuesWithWorktree()
 
 	if enabled {
 		t.Error("worktreeEnabled should be false")
 	}
-	if branch != "feature/test" {
-		t.Errorf("Branch: got %q, want %q", branch, "feature/test")
+	// No worktree => no branch derived.
+	if branch != "" {
+		t.Errorf("Branch should be empty when worktree disabled, got %q", branch)
 	}
 }
 
-func TestNewDialog_Validate_WorktreeEnabled_EmptyBranch(t *testing.T) {
+func TestNewDialog_Validate_WorktreeEnabled_NameHasNoAlnum(t *testing.T) {
 	dialog := NewNewDialog()
-	dialog.nameInput.SetValue("test-session")
+	dialog.nameInput.SetValue("---") // sanitizes to an empty branch
 	dialog.pathInput.SetValue("/tmp/project")
 	dialog.worktreeEnabled = true
-	dialog.branchInput.SetValue("")
 
 	err := dialog.Validate()
 	if err == "" {
-		t.Error("Validation should fail when worktree enabled but branch is empty")
+		t.Error("Validation should fail when the name yields an empty branch")
 	}
-	if err != "Branch name required for worktree" {
+	if !strings.Contains(err, "letters or numbers") {
 		t.Errorf("Unexpected error message: %q", err)
 	}
 }
 
-func TestNewDialog_Validate_WorktreeEnabled_InvalidBranch(t *testing.T) {
+func TestNewDialog_Validate_WorktreeEnabled_ValidName(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.nameInput.SetValue("test-session")
 	dialog.pathInput.SetValue("/tmp/project")
 	dialog.worktreeEnabled = true
-	dialog.branchInput.SetValue("feature..test") // Invalid: contains ..
-
-	err := dialog.Validate()
-	if err == "" {
-		t.Error("Validation should fail for invalid branch name")
-	}
-	if err != "branch name cannot contain '..'" {
-		t.Errorf("Unexpected error message: %q", err)
-	}
-}
-
-func TestNewDialog_Validate_WorktreeEnabled_ValidBranch(t *testing.T) {
-	dialog := NewNewDialog()
-	dialog.nameInput.SetValue("test-session")
-	dialog.pathInput.SetValue("/tmp/project")
-	dialog.worktreeEnabled = true
-	dialog.branchInput.SetValue("feature/test-branch")
 
 	err := dialog.Validate()
 	if err != "" {
-		t.Errorf("Validation should pass for valid branch, got: %q", err)
+		t.Errorf("Validation should pass for a name with a valid derived branch, got: %q", err)
 	}
 }
 
@@ -653,7 +637,6 @@ func TestNewDialog_Validate_WorktreeDisabled_IgnoresBranch(t *testing.T) {
 	dialog.nameInput.SetValue("test-session")
 	dialog.pathInput.SetValue("/tmp/project")
 	dialog.worktreeEnabled = false
-	dialog.branchInput.SetValue("")
 
 	err := dialog.Validate()
 	if err != "" {
@@ -664,15 +647,11 @@ func TestNewDialog_Validate_WorktreeDisabled_IgnoresBranch(t *testing.T) {
 func TestNewDialog_ShowInGroup_ResetsWorktree(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.worktreeEnabled = true
-	dialog.branchInput.SetValue("feature/old-branch")
 
 	dialog.ShowInGroup("projects", "Projects", "")
 
 	if dialog.worktreeEnabled {
 		t.Error("worktreeEnabled should be reset to false on ShowInGroup")
-	}
-	if dialog.branchInput.Value() != "" {
-		t.Errorf("branchInput should be reset, got: %q", dialog.branchInput.Value())
 	}
 }
 
@@ -697,15 +676,6 @@ func TestNewDialog_ShowInGroup_EmptyDefaultPath(t *testing.T) {
 	}
 }
 
-func TestNewDialog_BranchInputInitialized(t *testing.T) {
-	dialog := NewNewDialog()
-
-	if dialog.branchInput.Placeholder != "feature/branch-name" {
-		t.Errorf("branchInput placeholder: got %q, want %q",
-			dialog.branchInput.Placeholder, "feature/branch-name")
-	}
-}
-
 func TestNewDialog_WorktreeToggle_ViaKeyPress(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.Show()
@@ -718,8 +688,9 @@ func TestNewDialog_WorktreeToggle_ViaKeyPress(t *testing.T) {
 		t.Error("Worktree should be enabled after pressing 'w' on command field")
 	}
 
-	if dialog.focusIndex != 3 {
-		t.Errorf("Focus should move to branch field (3), got %d", dialog.focusIndex)
+	// Worktree has no input field, so focus stays on the tool field (2).
+	if dialog.focusIndex != 2 {
+		t.Errorf("Focus should stay on the tool field (2), got %d", dialog.focusIndex)
 	}
 
 	dialog.focusIndex = 2
@@ -748,7 +719,7 @@ func TestNewDialog_View_ShowsWorktreeCheckbox(t *testing.T) {
 	}
 }
 
-func TestNewDialog_View_ShowsBranchInputWhenEnabled(t *testing.T) {
+func TestNewDialog_View_ShowsWorktreePreviewWhenEnabled(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.SetSize(80, 40)
 	dialog.Show()
@@ -756,8 +727,8 @@ func TestNewDialog_View_ShowsBranchInputWhenEnabled(t *testing.T) {
 
 	view := dialog.View()
 
-	if !strings.Contains(view, "Branch:") {
-		t.Error("View should contain 'Branch:' label when worktree enabled")
+	if !strings.Contains(view, "Worktree:") {
+		t.Error("View should contain the 'Worktree:' preview label when worktree enabled")
 	}
 
 	if !strings.Contains(view, "[x]") {
@@ -765,7 +736,7 @@ func TestNewDialog_View_ShowsBranchInputWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestNewDialog_View_HidesBranchInputWhenDisabled(t *testing.T) {
+func TestNewDialog_View_HidesWorktreePreviewWhenDisabled(t *testing.T) {
 	dialog := NewNewDialog()
 	dialog.SetSize(80, 40)
 	dialog.Show()
@@ -774,8 +745,8 @@ func TestNewDialog_View_HidesBranchInputWhenDisabled(t *testing.T) {
 
 	view := dialog.View()
 
-	if strings.Contains(view, "Branch:") {
-		t.Error("View should NOT contain 'Branch:' label when worktree disabled")
+	if strings.Contains(view, "Worktree:") {
+		t.Error("View should NOT contain the 'Worktree:' preview when worktree disabled")
 	}
 
 	if !strings.Contains(view, "[ ]") {
@@ -858,9 +829,9 @@ func TestNewDialog_ShowInGroup_ClearsError(t *testing.T) {
 	}
 }
 
-// ===== Worktree Branch Auto-Matching Tests =====
+// ===== Worktree Name-Derived Branch Tests =====
 
-func TestNewDialog_ToggleWorktree_AutoPopulatesBranch(t *testing.T) {
+func TestNewDialog_ToggleWorktree_EnablesAndDerivesBranch(t *testing.T) {
 	d := NewNewDialog()
 	d.nameInput.SetValue("amber-falcon")
 
@@ -869,57 +840,38 @@ func TestNewDialog_ToggleWorktree_AutoPopulatesBranch(t *testing.T) {
 	if !d.worktreeEnabled {
 		t.Fatal("worktreeEnabled should be true after toggle")
 	}
-	if d.branchInput.Value() != "feature/amber-falcon" {
-		t.Errorf("branch = %q, want %q", d.branchInput.Value(), "feature/amber-falcon")
-	}
-	if !d.branchAutoSet {
-		t.Error("branchAutoSet should be true after auto-population")
+	// Branch is the sanitized, lowercased session name — no prefix (name == branch == folder).
+	if got, want := d.derivedBranch(), strings.ToLower(git.SanitizeBranchName("amber-falcon")); got != want {
+		t.Errorf("derivedBranch = %q, want %q", got, want)
 	}
 }
 
-func TestNewDialog_AutoBranch_ConfigurablePrefix(t *testing.T) {
+func TestNewDialog_DerivedBranch_SanitizesNoPrefix(t *testing.T) {
 	d := NewNewDialog()
-
-	// Custom prefix is applied and the session name is sanitized into a valid branch.
-	d.branchPrefix = "wip/"
 	d.nameInput.SetValue("Dark Mode Toggle")
-	d.autoBranchFromName()
-	got := d.branchInput.Value()
-	if !strings.HasPrefix(got, "wip/") {
-		t.Errorf("branch %q should start with configured prefix %q", got, "wip/")
-	}
+
+	got := d.derivedBranch()
 	if strings.ContainsAny(got, " ") {
-		t.Errorf("branch %q should be sanitized (no spaces)", got)
+		t.Errorf("derived branch %q should be sanitized (no spaces)", got)
 	}
-
-	// Empty prefix disables prefixing (just the sanitized name).
-	d.branchPrefix = ""
-	d.branchAutoSet = true
-	d.nameInput.SetValue("hotfix")
-	d.autoBranchFromName()
-	if got := d.branchInput.Value(); got != "hotfix" {
-		t.Errorf("empty prefix: branch = %q, want %q", got, "hotfix")
+	if strings.HasPrefix(got, "feature/") || strings.HasPrefix(got, "wip/") {
+		t.Errorf("derived branch %q should carry no prefix", got)
 	}
-}
-
-func TestNewDialog_ToggleWorktree_EmptyName_NoBranch(t *testing.T) {
-	d := NewNewDialog()
-
-	d.ToggleWorktree()
-
-	if d.branchInput.Value() != "" {
-		t.Errorf("branch should be empty when name is empty, got %q", d.branchInput.Value())
+	if got != strings.ToLower(got) {
+		t.Errorf("derived branch %q should be lowercase", got)
+	}
+	if want := strings.ToLower(git.SanitizeBranchName("Dark Mode Toggle")); got != want {
+		t.Errorf("derived branch = %q, want %q", got, want)
 	}
 }
 
-func TestNewDialog_ShowInGroup_ResetsBranchAutoSet(t *testing.T) {
+func TestNewDialog_DerivedBranch_EmptyName(t *testing.T) {
 	d := NewNewDialog()
-	d.branchAutoSet = true
 
-	d.ShowInGroup("projects", "Projects", "")
+	d.ToggleWorktree() // no name set
 
-	if d.branchAutoSet {
-		t.Error("branchAutoSet should be reset to false on ShowInGroup")
+	if got := d.derivedBranch(); got != "" {
+		t.Errorf("derived branch should be empty when name is empty, got %q", got)
 	}
 }
 
