@@ -122,8 +122,6 @@ func (h *HelpOverlay) View() string {
 				{"v", "Toggle preview mode (output/stats/both)"},
 				{"u", "Cycle unread → parked → normal"},
 				{"K / J", "Reorder up/down"},
-				{"f", "Quick fork (Claude only)"},
-				{"F", "Fork with options (Claude only)"},
 				{"c", "Copy output to clipboard"},
 				{"x", "Send output to session"},
 			},
@@ -134,7 +132,6 @@ func (h *HelpOverlay) View() string {
 				{"W", "Finish worktree (merge + cleanup)"},
 				{"O", "Worktree manager (remove orphans)"},
 				{"n → w", "Create session in worktree"},
-				{"F → w", "Fork session into worktree"},
 			},
 		},
 		{

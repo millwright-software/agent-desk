@@ -9,6 +9,18 @@ upstream; this file tracks changes made in the fork. The format follows
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-08-24
+
+### Removed
+- **Fork is no longer advertised.** The fork keybindings were already unwired in this fork (dead code), but the
+  help screen and README still listed `f`/`F`, a `session fork` CLI example, and a "Fork sessions" section.
+  Removed those so the docs match reality. The dormant fork code remains in the tree.
+
+### Fixed
+- **Corrected the README status table.** It claimed Running=green / Waiting=yellow with a `◐` symbol; the actual
+  UI is Running=**yellow** `●`, Waiting=**green** `●`. Also documented the dimmer-green unread bookmark (`u`) vs
+  the bright-green waiting state.
+
 ## [1.0.5] - 2026-08-22
 
 ### Fixed
