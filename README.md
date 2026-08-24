@@ -49,7 +49,6 @@ Agent Desk puts every agent session in one place:
 - **See status at a glance** — running, waiting, idle, or errored, for every session
 - **Switch in a keystroke** — jump to any session instantly; attach/detach without losing state
 - **Stay organized** — groups, fuzzy search, manual flags, and git worktrees
-- **Fork Claude conversations** — branch a session with full context to try a different approach
 
 It's tmux underneath, with AI-aware status detection and session management layered on top.
 
@@ -84,7 +83,6 @@ Then run `agent-desk`. To update, re-run the installer (or `go install …@lates
 ```bash
 agent-desk                        # Launch the TUI
 agent-desk add . -c claude        # Add the current dir as a Claude session
-agent-desk session fork my-proj   # Fork a Claude session
 agent-desk mcp attach my-proj exa # Attach an MCP server to a session
 ```
 
@@ -94,7 +92,6 @@ agent-desk mcp attach my-proj exa # Attach an MCP server to a session
 |-----|--------|
 | `Enter` | Attach to session |
 | `n` | New session |
-| `f` / `F` | Fork (quick / dialog) |
 | `u` | Cycle manual flag: unread → parked → normal |
 | `M` | MCP Manager |
 | `/` / `G` | Search / global search across all Claude conversations |
@@ -114,18 +111,16 @@ Agent Desk polls each session and infers what its agent is doing:
 
 | Status | Symbol | Meaning |
 |--------|--------|---------|
-| **Running** | `●` green | Actively working |
-| **Waiting** | `◐` yellow | Needs your input |
+| **Running** | `●` yellow | Actively working |
+| **Waiting** | `●` green | Needs your input |
 | **Idle** | `○` gray | Ready for commands |
 | **Error** | `✕` red | Something went wrong |
 
+A manual unread bookmark (`u`) shows a **dimmer green** dot — "seen it, reply still owed" — distinct from the
+bright green of a waiting session you haven't looked at yet.
+
 For Claude, detection uses the session hook and transcript for fast, accurate state (including the current model).
 Other tools fall back to output-pattern and tmux-activity detection.
-
-### Fork sessions
-
-Fork any Claude conversation instantly — each fork inherits the full history, so you can explore a different
-approach without losing your place. Press `f` to fork, `F` to name/group it. Fork forks as deep as you like.
 
 ### MCP manager
 
@@ -157,7 +152,7 @@ default_location = "subdirectory"  # "sibling" (default), "subdirectory", or a c
 
 | Tool | Integration |
 |------|-------------|
-| **Claude Code** | Full — status, MCP, fork, resume, model detection |
+| **Claude Code** | Full — status, MCP, resume, model detection |
 | **Gemini CLI** | Full — status, MCP, resume |
 | **GitHub Copilot CLI** | Status detection, resume (`--continue`), organization |
 | **OpenCode / Codex / Cursor** (terminal) | Status detection + organization |
@@ -194,8 +189,7 @@ busy_patterns = ["thinking...", "processing..."]
 <summary><b>How is this different from just using tmux?</b></summary>
 
 Agent Desk adds AI-specific intelligence on top of tmux: status detection that knows when Claude is working vs.
-waiting, session forking with context inheritance, MCP management, global search across conversations, and
-organized groups. It's tmux plus AI awareness.
+waiting, MCP management, global search across conversations, and organized groups. It's tmux plus AI awareness.
 
 </details>
 
