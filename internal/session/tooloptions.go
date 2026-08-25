@@ -29,12 +29,6 @@ type ClaudeOptions struct {
 	UseChrome bool `json:"use_chrome,omitempty"`
 	// UseTeammateMode adds --teammate-mode tmux flag
 	UseTeammateMode bool `json:"use_teammate_mode,omitempty"`
-
-	// Transient fields for worktree fork (not persisted)
-	WorkDir          string `json:"-"`
-	WorktreePath     string `json:"-"`
-	WorktreeRepoRoot string `json:"-"`
-	WorktreeBranch   string `json:"-"`
 }
 
 // ToolName returns "claude"
@@ -58,26 +52,6 @@ func (o *ClaudeOptions) ToArgs() []string {
 	// "new" or empty = default behavior, no special flag
 
 	// Permission flags (mutually exclusive, SkipPermissions takes precedence)
-	if o.SkipPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	} else if o.AllowSkipPermissions {
-		args = append(args, "--allow-dangerously-skip-permissions")
-	}
-	if o.UseChrome {
-		args = append(args, "--chrome")
-	}
-	if o.UseTeammateMode {
-		args = append(args, "--teammate-mode", "tmux")
-	}
-
-	return args
-}
-
-// ToArgsForFork returns arguments suitable for fork resume command
-// Fork always uses --resume internally, so session mode flags are not included
-func (o *ClaudeOptions) ToArgsForFork() []string {
-	var args []string
-
 	if o.SkipPermissions {
 		args = append(args, "--dangerously-skip-permissions")
 	} else if o.AllowSkipPermissions {
@@ -222,19 +196,6 @@ func (o *OpenCodeOptions) ToArgs() []string {
 		args = append(args, "--agent", o.Agent)
 	}
 
-	return args
-}
-
-// ToArgsForFork returns arguments suitable for fork resume command.
-// Fork uses -s internally, so session mode flags are excluded.
-func (o *OpenCodeOptions) ToArgsForFork() []string {
-	var args []string
-	if o.Model != "" {
-		args = append(args, "-m", o.Model)
-	}
-	if o.Agent != "" {
-		args = append(args, "--agent", o.Agent)
-	}
 	return args
 }
 

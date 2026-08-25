@@ -9,6 +9,16 @@ upstream; this file tracks changes made in the fork. The format follows
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-08-25
+
+### Removed
+- **Deleted the session-forking feature entirely** (~2,200 lines). It had been dormant/unreachable since the
+  keybindings were unwired, and v1.0.6 stopped advertising it; this removes the code: the fork dialog, all
+  `home.go` fork handlers and animation state, the session-package primitives (`CanFork`, `Fork*`,
+  `CreateForkedInstance*`, `ForkOpenCode*`, `writeOpenCodeForkScript`), the `ToArgsForFork` option methods and
+  their fork-only transient fields, the `session fork` CLI subcommand, and all fork tests. No behavior change —
+  fork was already unusable.
+
 ## [1.0.6] - 2026-08-24
 
 ### Removed

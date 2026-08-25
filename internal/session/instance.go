@@ -477,7 +477,7 @@ func extractGroupPath(projectPath string) string {
 
 // buildClaudeCommand builds the claude command with session capture
 // For new sessions: captures session ID via print mode, stores in tmux env, then resumes
-// This ensures we always know the session ID for fork/restart features
+// This ensures we always know the session ID for restart features
 // Respects: CLAUDE_CONFIG_DIR, dangerous_mode from user config, and [shell].env_files
 func (i *Instance) buildClaudeCommand(baseCommand string) string {
 	envPrefix := i.buildEnvSourceCommand()
@@ -560,7 +560,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 		// 1. Starts Claude in print mode to get session ID
 		// 2. Stores session ID in tmux environment (if capture succeeded)
 		// 3. Resumes that session interactively
-		// Fallback ensures Claude starts (without fork/restart support) rather than failing completely
+		// Fallback ensures Claude starts (without restart support) rather than failing completely
 		//
 		// IMPORTANT: For capture-resume commands (which contain $(...) syntax), we MUST use
 		// "claude" binary + CLAUDE_CONFIG_DIR, NOT a custom command alias like "cdw".
@@ -602,7 +602,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 		return baseCmd
 	}
 
-	// For custom commands (e.g., fork commands), return as-is
+	// For custom commands, return as-is
 	return baseCommand
 }
 
@@ -728,7 +728,7 @@ func (i *Instance) buildOpenCodeCommand(baseCommand string) string {
 		return envPrefix + "opencode" + extraFlags
 	}
 
-	// For custom commands (e.g., fork commands), return as-is
+	// For custom commands, return as-is
 	return envPrefix + baseCommand
 }
 
@@ -1652,7 +1652,7 @@ func (i *Instance) UpdateStatus() error {
 		i.Status = StatusError
 	}
 
-	// Update tool detection dynamically (enables fork when Claude starts)
+	// Update tool detection dynamically
 	if detectedTool := i.tmuxSession.DetectTool(); detectedTool != "" {
 		i.Tool = detectedTool
 	}
@@ -1677,7 +1677,7 @@ func (i *Instance) UpdateStatus() error {
 }
 
 // UpdateClaudeSession updates the Claude session ID from tmux environment.
-// The capture-resume pattern (used in Start/Fork/Restart) sets CLAUDE_SESSION_ID
+// The capture-resume pattern (used in Start/Restart) sets CLAUDE_SESSION_ID
 // in the tmux environment, making this the single authoritative source.
 //
 // No file scanning fallback - we rely on the consistent capture-resume pattern.
@@ -3066,91 +3066,6 @@ func (i *Instance) CanRestart() bool {
 	return i.Status == StatusError || i.tmuxSession == nil || !i.tmuxSession.Exists()
 }
 
-// CanFork returns true if this session can be forked
-func (i *Instance) CanFork() bool {
-	// Gemini CLI doesn't support forking
-	if i.Tool == "gemini" {
-		return false
-	}
-
-	// OpenCode sessions can fork if session ID is recent
-	if i.Tool == "opencode" {
-		return i.CanForkOpenCode()
-	}
-
-	// Claude sessions can fork if session ID is recent
-	if i.ClaudeSessionID == "" {
-		return false
-	}
-	return time.Since(i.ClaudeDetectedAt) < 5*time.Minute
-}
-
-// CanForkOpenCode returns true if this OpenCode session can be forked
-func (i *Instance) CanForkOpenCode() bool {
-	return i.Tool == "opencode" && i.OpenCodeSessionID != "" && time.Since(i.OpenCodeDetectedAt) < 5*time.Minute
-}
-
-// Fork returns the command to create a forked Claude session
-// Uses capture-resume pattern: starts fork in print mode to get new session ID,
-// stores in tmux environment, then resumes interactively
-// Deprecated: Use ForkWithOptions instead
-func (i *Instance) Fork(newTitle, newGroupPath string) (string, error) {
-	return i.ForkWithOptions(newTitle, newGroupPath, nil)
-}
-
-// ForkWithOptions returns the command to create a forked Claude session with custom options
-// Uses capture-resume pattern: starts fork in print mode to get new session ID,
-// stores in tmux environment, then resumes interactively
-func (i *Instance) ForkWithOptions(newTitle, newGroupPath string, opts *ClaudeOptions) (string, error) {
-	// Sync session from disk to pick up /clear session changes before forking
-	i.syncClaudeSessionFromDisk()
-
-	if !i.CanFork() {
-		return "", fmt.Errorf("cannot fork: no active Claude session")
-	}
-
-	workDir := i.ProjectPath
-	if opts != nil && opts.WorkDir != "" {
-		workDir = opts.WorkDir
-	}
-
-	// IMPORTANT: For capture-resume commands (which contain $(...) syntax), we MUST use
-	// "claude" binary + CLAUDE_CONFIG_DIR, NOT a custom command alias like "cdw".
-	// Reason: Commands with $(...) get wrapped in `bash -c` for fish compatibility (#47),
-	// and shell aliases are not available in non-interactive bash shells.
-	bashExportPrefix := ""
-	if IsClaudeConfigDirExplicit() {
-		configDir := GetClaudeConfigDir()
-		bashExportPrefix = fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s; ", configDir)
-	}
-
-	// If no options provided, use defaults from config
-	if opts == nil {
-		userConfig, _ := LoadUserConfig()
-		opts = NewClaudeOptions(userConfig)
-	}
-
-	// Build extra flags from options (for fork, we use ToArgsForFork which excludes session mode)
-	extraFlags := i.buildClaudeExtraFlags(opts)
-
-	// Pre-generate UUID for forked session and use --session-id flag
-	// Note: --session-id works for new/forked sessions as of Claude CLI 2.1.x
-	// Note: Path is single-quoted to handle spaces and special characters
-	cmd := fmt.Sprintf(
-		`cd '%s' && `+
-			`session_id=$(uuidgen | tr '[:upper:]' '[:lower:]'); `+
-			`tmux set-environment CLAUDE_SESSION_ID "$session_id"; `+
-			`%sclaude --session-id "$session_id" --resume %s --fork-session%s`,
-		workDir,
-		bashExportPrefix, i.ClaudeSessionID, extraFlags)
-	cmd, err := i.applyWrapper(cmd)
-	if err != nil {
-		return "", err
-	}
-
-	return cmd, nil
-}
-
 // GetActualWorkDir returns the actual working directory from tmux, or falls back to ProjectPath
 func (i *Instance) GetActualWorkDir() string {
 	if i.tmuxSession != nil {
@@ -3159,173 +3074,6 @@ func (i *Instance) GetActualWorkDir() string {
 		}
 	}
 	return i.ProjectPath
-}
-
-// CreateForkedInstance creates a new Instance configured for forking
-// Deprecated: Use CreateForkedInstanceWithOptions instead
-func (i *Instance) CreateForkedInstance(newTitle, newGroupPath string) (*Instance, string, error) {
-	return i.CreateForkedInstanceWithOptions(newTitle, newGroupPath, nil)
-}
-
-// CreateForkedInstanceWithOptions creates a new Instance configured for forking with custom options
-func (i *Instance) CreateForkedInstanceWithOptions(newTitle, newGroupPath string, opts *ClaudeOptions) (*Instance, string, error) {
-	cmd, err := i.ForkWithOptions(newTitle, newGroupPath, opts)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// Create new instance - use worktree path if provided, otherwise parent's project path
-	projectPath := i.ProjectPath
-	if opts != nil && opts.WorkDir != "" {
-		projectPath = opts.WorkDir
-	}
-	forked := NewInstance(newTitle, projectPath)
-	if newGroupPath != "" {
-		forked.GroupPath = newGroupPath
-	} else {
-		forked.GroupPath = i.GroupPath
-	}
-	forked.Command = cmd
-	forked.Tool = "claude"
-
-	// Store options in the new instance for persistence
-	if opts != nil {
-		if err := forked.SetClaudeOptions(opts); err != nil {
-			// Log but don't fail - options are not critical for fork
-			sessionLog.Warn("set_claude_options_failed", slog.String("error", err.Error()))
-		}
-		// Copy transient worktree fields to the forked instance
-		if opts.WorktreePath != "" {
-			forked.WorktreePath = opts.WorktreePath
-			forked.WorktreeRepoRoot = opts.WorktreeRepoRoot
-			forked.WorktreeBranch = opts.WorktreeBranch
-		}
-	}
-
-	return forked, cmd, nil
-}
-
-// ForkOpenCode returns the command to create a forked OpenCode session.
-// Uses export/import to clone the session with a new ID, then launches
-// the forked session with opencode -s <new-id>.
-// Deprecated: Use ForkOpenCodeWithOptions instead.
-func (i *Instance) ForkOpenCode(newTitle, newGroupPath string) (string, error) {
-	return i.ForkOpenCodeWithOptions(newTitle, newGroupPath, nil)
-}
-
-// ForkOpenCodeWithOptions returns the command to create a forked OpenCode session with custom options.
-// Uses export/import to clone the session with a new ID, then launches
-// the forked session with opencode -s <new-id> plus any model/agent flags.
-func (i *Instance) ForkOpenCodeWithOptions(newTitle, newGroupPath string, opts *OpenCodeOptions) (string, error) {
-	if !i.CanForkOpenCode() {
-		return "", fmt.Errorf("cannot fork: no active OpenCode session")
-	}
-
-	workDir := i.ProjectPath
-	envPrefix := i.buildEnvSourceCommand()
-
-	// Build extra flags from options (for fork, exclude session mode flags)
-	var extraFlags string
-	if opts != nil {
-		for _, arg := range opts.ToArgsForFork() {
-			extraFlags += " " + arg
-		}
-	} else if config, err := LoadUserConfig(); err == nil && config != nil {
-		defaultOpts := NewOpenCodeOptions(config)
-		for _, arg := range defaultOpts.ToArgsForFork() {
-			extraFlags += " " + arg
-		}
-	}
-
-	scriptPath, err := i.writeOpenCodeForkScript(workDir, envPrefix, extraFlags)
-	if err != nil {
-		return "", fmt.Errorf("failed to create fork script: %w", err)
-	}
-
-	return fmt.Sprintf("bash '%s'", scriptPath), nil
-}
-
-// writeOpenCodeForkScript writes a bash script that forks via export/import.
-// The script self-deletes after execution.
-func (i *Instance) writeOpenCodeForkScript(workDir, envPrefix, extraFlags string) (string, error) {
-	script := fmt.Sprintf(`#!/bin/bash
-cd "%s" || { echo "cd failed to: %s"; exit 1; }
-%s
-tmpfile=$(mktemp -t opencode-fork)
-trap "rm -f \"$tmpfile\" \"$0\"" EXIT
-
-opencode export %s 2>/dev/null > "$tmpfile"
-export_status=$?
-if [ $export_status -ne 0 ]; then
-  echo "Export failed (exit $export_status):"
-  cat "$tmpfile"
-  exit 1
-fi
-
-hash_cmd="md5sum"
-command -v md5sum >/dev/null 2>&1 || hash_cmd="md5"
-new_id="ses_$(date +%%s | $hash_cmd | head -c12)$(openssl rand -base64 20 | tr -dc a-zA-Z0-9 | head -c14)"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  sed -i "" "s/%s/$new_id/g" "$tmpfile" || { echo "Sed failed"; exit 1; }
-else
-  sed -i "s/%s/$new_id/g" "$tmpfile" || { echo "Sed failed"; exit 1; }
-fi
-opencode import "$tmpfile" 2>&1 || { echo "Import failed"; exit 1; }
-tmux set-environment OPENCODE_SESSION_ID "$new_id"
-echo "Forked to: $new_id"
-opencode -s "$new_id"%s
-`, workDir, workDir, envPrefix, i.OpenCodeSessionID,
-		i.OpenCodeSessionID, i.OpenCodeSessionID, extraFlags)
-
-	f, err := os.CreateTemp("", "opencode-fork-*.sh")
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	if _, err := f.WriteString(script); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-
-	if err := f.Chmod(0755); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-
-	return f.Name(), nil
-}
-
-// CreateForkedOpenCodeInstance creates a new Instance configured for forking an OpenCode session
-// Deprecated: Use CreateForkedOpenCodeInstanceWithOptions instead.
-func (i *Instance) CreateForkedOpenCodeInstance(newTitle, newGroupPath string) (*Instance, string, error) {
-	return i.CreateForkedOpenCodeInstanceWithOptions(newTitle, newGroupPath, nil)
-}
-
-// CreateForkedOpenCodeInstanceWithOptions creates a new Instance configured for forking with custom options
-func (i *Instance) CreateForkedOpenCodeInstanceWithOptions(newTitle, newGroupPath string, opts *OpenCodeOptions) (*Instance, string, error) {
-	cmd, err := i.ForkOpenCodeWithOptions(newTitle, newGroupPath, opts)
-	if err != nil {
-		return nil, "", err
-	}
-
-	forked := NewInstance(newTitle, i.ProjectPath)
-	if newGroupPath != "" {
-		forked.GroupPath = newGroupPath
-	} else {
-		forked.GroupPath = i.GroupPath
-	}
-	forked.Command = cmd
-	forked.Tool = "opencode"
-
-	// Store options in the new instance for persistence
-	if opts != nil {
-		if err := forked.SetOpenCodeOptions(opts); err != nil {
-			sessionLog.Warn("set_opencode_options_failed", slog.String("error", err.Error()))
-		}
-	}
-
-	return forked, cmd, nil
 }
 
 // Exists checks if the tmux session still exists
