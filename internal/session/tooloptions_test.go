@@ -111,81 +111,6 @@ func TestClaudeOptions_ToArgs(t *testing.T) {
 	}
 }
 
-func TestClaudeOptions_ToArgsForFork(t *testing.T) {
-	tests := []struct {
-		name     string
-		opts     ClaudeOptions
-		expected []string
-	}{
-		{
-			name:     "empty options",
-			opts:     ClaudeOptions{},
-			expected: nil,
-		},
-		{
-			name: "session mode ignored for fork",
-			opts: ClaudeOptions{
-				SessionMode: "continue",
-			},
-			expected: nil,
-		},
-		{
-			name: "skip permissions",
-			opts: ClaudeOptions{
-				SkipPermissions: true,
-			},
-			expected: []string{"--dangerously-skip-permissions"},
-		},
-		{
-			name: "chrome",
-			opts: ClaudeOptions{
-				UseChrome: true,
-			},
-			expected: []string{"--chrome"},
-		},
-		{
-			name: "teammate mode",
-			opts: ClaudeOptions{
-				UseTeammateMode: true,
-			},
-			expected: []string{"--teammate-mode", "tmux"},
-		},
-		{
-			name: "all flags",
-			opts: ClaudeOptions{
-				SkipPermissions: true,
-				UseChrome:       true,
-				UseTeammateMode: true,
-			},
-			expected: []string{"--dangerously-skip-permissions", "--chrome", "--teammate-mode", "tmux"},
-		},
-		{
-			name: "allow skip permissions for fork",
-			opts: ClaudeOptions{
-				AllowSkipPermissions: true,
-			},
-			expected: []string{"--allow-dangerously-skip-permissions"},
-		},
-		{
-			name: "skip permissions takes precedence for fork",
-			opts: ClaudeOptions{
-				SkipPermissions:      true,
-				AllowSkipPermissions: true,
-			},
-			expected: []string{"--dangerously-skip-permissions"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.opts.ToArgsForFork()
-			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("ToArgsForFork() = %v, expected %v", got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestNewClaudeOptions_WithConfig(t *testing.T) {
 	// Test with dangerous mode enabled in config
 	dangerousModeBool := true
@@ -592,46 +517,6 @@ func TestOpenCodeOptions_ToArgs(t *testing.T) {
 			got := tt.opts.ToArgs()
 			if !reflect.DeepEqual(got, tt.expected) {
 				t.Errorf("ToArgs() = %v, expected %v", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestOpenCodeOptions_ToArgsForFork(t *testing.T) {
-	tests := []struct {
-		name     string
-		opts     OpenCodeOptions
-		expected []string
-	}{
-		{
-			name:     "empty options",
-			opts:     OpenCodeOptions{},
-			expected: nil,
-		},
-		{
-			name: "session mode ignored for fork",
-			opts: OpenCodeOptions{
-				SessionMode:     "resume",
-				ResumeSessionID: "ses_abc123",
-			},
-			expected: nil,
-		},
-		{
-			name: "model and agent preserved for fork",
-			opts: OpenCodeOptions{
-				SessionMode: "continue",
-				Model:       "anthropic/claude-sonnet-4-5-20250929",
-				Agent:       "coder",
-			},
-			expected: []string{"-m", "anthropic/claude-sonnet-4-5-20250929", "--agent", "coder"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.opts.ToArgsForFork()
-			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("ToArgsForFork() = %v, expected %v", got, tt.expected)
 			}
 		})
 	}

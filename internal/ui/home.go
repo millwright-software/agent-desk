@@ -147,7 +147,6 @@ type Home struct {
 	globalSearchIndex    *session.GlobalSearchIndex // Search index (nil if disabled)
 	newDialog            *NewDialog
 	groupDialog          *GroupDialog          // For creating/renaming groups
-	forkDialog           *ForkDialog           // For forking sessions
 	confirmDialog        *ConfirmDialog        // For confirming destructive actions
 	helpOverlay          *HelpOverlay          // For showing keyboard shortcuts
 	mcpDialog            *MCPDialog            // For managing MCPs
@@ -245,7 +244,6 @@ type Home struct {
 	launchingSessions  map[string]time.Time // sessionID -> creation time
 	resumingSessions   map[string]time.Time // sessionID -> resume time (for restart/resume)
 	mcpLoadingSessions map[string]time.Time // sessionID -> MCP reload time
-	forkingSessions    map[string]time.Time // sessionID -> fork start time (fork in progress)
 	animationFrame     int                  // Current frame for spinner animation
 
 	// Context for cleanup
@@ -363,12 +361,6 @@ type loadSessionsMsg struct {
 
 type sessionCreatedMsg struct {
 	instance *session.Instance
-	err      error
-}
-
-type sessionForkedMsg struct {
-	instance *session.Instance
-	sourceID string // ID of the source session that was forked (for cleanup)
 	err      error
 }
 
@@ -531,7 +523,6 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		search:               NewSearch(),
 		newDialog:            NewNewDialog(),
 		groupDialog:          NewGroupDialog(),
-		forkDialog:           NewForkDialog(),
 		confirmDialog:        NewConfirmDialog(),
 		helpOverlay:          NewHelpOverlay(),
 		mcpDialog:            NewMCPDialog(),
@@ -559,7 +550,6 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		launchingSessions:    make(map[string]time.Time),
 		resumingSessions:     make(map[string]time.Time),
 		mcpLoadingSessions:   make(map[string]time.Time),
-		forkingSessions:      make(map[string]time.Time),
 		lastLogActivity:      make(map[string]time.Time),
 		worktreeDirtyCache:   make(map[string]bool),
 		worktreeDirtyCacheTs: make(map[string]time.Time),
@@ -1316,11 +1306,6 @@ func (h *Home) hasActiveAnimation(sessionID string) bool {
 	inst := h.instanceByID[sessionID]
 	if inst == nil {
 		return false
-	}
-
-	// Check forking first (always shows while tracked)
-	if _, ok := h.forkingSessions[sessionID]; ok {
-		return true
 	}
 
 	// Determine animation start time and type
@@ -2377,73 +2362,6 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case sessionForkedMsg:
-		// Clean up forking state for source session
-		if msg.sourceID != "" {
-			delete(h.forkingSessions, msg.sourceID)
-		}
-
-		// Handle reload scenario: forked session was already started in tmux, we MUST save it
-		h.reloadMu.Lock()
-		reloading := h.isReloading
-		h.reloadMu.Unlock()
-		if reloading && msg.err == nil && msg.instance != nil {
-			// CRITICAL: Save the forked session to JSON immediately to prevent orphaning
-			uiLog.Debug("reload_save_session_forked", slog.String("id", msg.instance.ID), slog.String("title", msg.instance.Title))
-			h.instancesMu.Lock()
-			h.instances = append(h.instances, msg.instance)
-			h.instancesMu.Unlock()
-			h.forceSaveInstances()
-			if h.storageWatcher != nil {
-				h.storageWatcher.TriggerReload()
-			}
-			return h, nil
-		}
-
-		if msg.err != nil {
-			h.setError(msg.err)
-		} else {
-			h.instancesMu.Lock()
-			h.instances = append(h.instances, msg.instance)
-			h.instanceByID[msg.instance.ID] = msg.instance
-			// Run dedup to ensure the forked session doesn't have a duplicate ID
-			// This is critical: fork detection may have picked up wrong session
-			session.UpdateClaudeSessionsWithDedup(h.instances)
-			h.instancesMu.Unlock()
-			// Invalidate status counts cache
-			h.cachedStatusCounts.valid.Store(false)
-
-			// Track as launching for animation
-			h.launchingSessions[msg.instance.ID] = time.Now()
-
-			// Expand the group so the session is visible
-			if msg.instance.GroupPath != "" {
-				h.groupTree.ExpandGroupWithParents(msg.instance.GroupPath)
-			}
-
-			// Add to existing group tree instead of rebuilding
-			h.groupTree.AddSession(msg.instance)
-			h.rebuildFlatItems()
-			h.search.SetItems(h.instances)
-
-			// Auto-select the forked session
-			for i, item := range h.flatItems {
-				if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.ID == msg.instance.ID {
-					h.cursor = i
-					h.syncViewport()
-					break
-				}
-			}
-
-			// Save both instances AND groups
-			// Use forceSave to bypass mtime check - forked session MUST persist
-			h.forceSaveInstances()
-
-			// Start fetching preview for the forked session
-			return h, h.fetchPreview(msg.instance)
-		}
-		return h, nil
-
 	case sessionDeletedMsg:
 		// CRITICAL FIX: Skip processing during reload to prevent state corruption
 		h.reloadMu.Lock()
@@ -3143,7 +3061,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}()
 		}
 
-		// Clean up expired animation entries (launching, resuming, MCP loading, forking)
+		// Clean up expired animation entries (launching, resuming, MCP loading)
 		// For Claude: remove after 20s timeout (animation shows for ~6-15s)
 		// For others: remove after 5s timeout
 		const claudeTimeout = 20 * time.Second
@@ -3154,7 +3072,6 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.cleanupExpiredAnimations(h.launchingSessions, claudeTimeout, defaultTimeout)
 		h.cleanupExpiredAnimations(h.resumingSessions, claudeTimeout, defaultTimeout)
 		h.cleanupExpiredAnimations(h.mcpLoadingSessions, claudeTimeout, defaultTimeout)
-		h.cleanupExpiredAnimations(h.forkingSessions, claudeTimeout, defaultTimeout)
 
 		// Notification bar sync handled by background worker (syncNotificationsBackground)
 		// which runs even when TUI is paused during tea.Exec
@@ -3273,9 +3190,6 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if h.groupDialog.IsVisible() {
 			return h.handleGroupDialogKey(msg)
-		}
-		if h.forkDialog.IsVisible() {
-			return h.handleForkDialogKey(msg)
 		}
 		if h.confirmDialog.IsVisible() {
 			return h.handleConfirmDialogKey(msg)
@@ -4596,84 +4510,6 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return h, cmd
 }
 
-// handleForkDialogKey handles keyboard input for the fork dialog
-func (h *Home) handleForkDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		// Validate before proceeding
-		if validationErr := h.forkDialog.Validate(); validationErr != "" {
-			h.forkDialog.SetError(validationErr)
-			return h, nil
-		}
-
-		// Get fork parameters from dialog including worktree settings
-		title, groupPath, branchName, worktreeEnabled := h.forkDialog.GetValuesWithWorktree()
-		opts := h.forkDialog.GetOptions()
-		h.clearError() // Clear any previous error
-
-		// Find the currently selected session
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil {
-				source := item.Session
-
-				// Handle worktree creation if enabled
-				if worktreeEnabled && branchName != "" {
-					if !git.IsGitRepo(source.ProjectPath) {
-						h.forkDialog.SetError("Path is not a git repository")
-						return h, nil
-					}
-					// De-nest: base off the main repo root even when forking a
-					// session that itself lives in a worktree.
-					repoRoot, err := git.GetWorktreeBaseRoot(source.ProjectPath)
-					if err != nil {
-						h.forkDialog.SetError(fmt.Sprintf("Failed to get repo root: %v", err))
-						return h, nil
-					}
-
-					wtSettings := session.GetWorktreeSettings()
-					worktreePath := git.WorktreePath(git.WorktreePathOptions{
-						Branch:    branchName,
-						Location:  wtSettings.DefaultLocation,
-						RepoDir:   repoRoot,
-						SessionID: git.GeneratePathID(),
-						Template:  wtSettings.Template(),
-					})
-
-					if err := os.MkdirAll(filepath.Dir(worktreePath), 0755); err != nil {
-						h.forkDialog.SetError(fmt.Sprintf("Failed to create directory: %v", err))
-						return h, nil
-					}
-
-					if err := git.CreateWorktree(repoRoot, worktreePath, branchName); err != nil {
-						h.forkDialog.SetError(fmt.Sprintf("Worktree creation failed: %v", err))
-						return h, nil
-					}
-
-					opts.WorkDir = worktreePath
-					opts.WorktreePath = worktreePath
-					opts.WorktreeRepoRoot = repoRoot
-					opts.WorktreeBranch = branchName
-				}
-
-				h.forkDialog.Hide()
-				return h, h.forkSessionCmdWithOptions(source, title, groupPath, opts)
-			}
-		}
-		h.forkDialog.Hide()
-		return h, nil
-
-	case "esc":
-		h.forkDialog.Hide()
-		h.clearError() // Clear any error
-		return h, nil
-	}
-
-	var cmd tea.Cmd
-	h.forkDialog, cmd = h.forkDialog.Update(msg)
-	return h, cmd
-}
-
 // saveInstances saves instances to storage
 func (h *Home) saveInstances() {
 	h.saveInstancesWithForce(false)
@@ -4707,7 +4543,7 @@ func (h *Home) saveInstancesWithForce(force bool) {
 	// This catches external changes (e.g., from CLI) even when fsnotify fails
 	// (common on 9p/NFS filesystems in WSL2).
 	// NOTE: Skip this check when force=true because critical saves MUST happen
-	// (e.g., new session creation, fork, delete - these would lose data if skipped)
+	// (e.g., new session creation, delete - these would lose data if skipped)
 	if !force {
 		h.reloadMu.Lock()
 		ourLoadMtime := h.lastLoadMtime
@@ -4956,17 +4792,6 @@ func (h *Home) createSessionInGroupWithWorktreeAndOptions(name, path, command, g
 	}
 }
 
-// quickForkSession performs a quick fork with default title suffix " (fork)"
-func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
-	if source == nil {
-		return nil
-	}
-	// Use source title with " (fork)" suffix
-	title := source.Title + " (fork)"
-	groupPath := source.GroupPath
-	return h.forkSessionCmd(source, title, groupPath)
-}
-
 // quickCreateSession creates a session instantly with auto-generated name and smart defaults.
 // When the cursor is on a session, it inherits that session's path and tool settings
 // (duplicate-like behavior per community feedback). When on a group header, it uses
@@ -5087,71 +4912,6 @@ func (h *Home) mostRecentPathInGroup(groupPath string) string {
 		return mostRecent.ProjectPath
 	}
 	return ""
-}
-
-// forkSessionWithDialog opens the fork dialog to customize title and group
-func (h *Home) forkSessionWithDialog(source *session.Instance) tea.Cmd {
-	if source == nil {
-		return nil
-	}
-	// Pre-populate dialog with source session info
-	h.forkDialog.Show(source.Title, source.ProjectPath, source.GroupPath)
-	return nil
-}
-
-// forkSessionCmd creates a forked session with the given title and group
-// Shows immediate UI feedback by tracking the source session in forkingSessions
-func (h *Home) forkSessionCmd(source *session.Instance, title, groupPath string) tea.Cmd {
-	return h.forkSessionCmdWithOptions(source, title, groupPath, nil)
-}
-
-// forkSessionCmdWithOptions creates a forked session with the given title, group, and Claude options
-// Shows immediate UI feedback by tracking the source session in forkingSessions
-func (h *Home) forkSessionCmdWithOptions(source *session.Instance, title, groupPath string, opts *session.ClaudeOptions) tea.Cmd {
-	if source == nil {
-		return nil
-	}
-
-	// Track source session as "forking" for immediate UI feedback
-	h.forkingSessions[source.ID] = time.Now()
-
-	// Capture current used session IDs before starting the async fork
-	// This ensures we don't detect an already-used session ID
-	usedIDs := h.getUsedClaudeSessionIDs()
-	sourceID := source.ID // Capture for closure
-
-	return func() tea.Msg {
-		// Check tmux availability before forking
-		if err := tmux.IsTmuxAvailable(); err != nil {
-			return sessionForkedMsg{err: fmt.Errorf("cannot fork session: %w", err), sourceID: sourceID}
-		}
-
-		var inst *session.Instance
-		var err error
-
-		switch source.Tool {
-		case "opencode":
-			inst, _, err = source.CreateForkedOpenCodeInstance(title, groupPath)
-		default:
-			inst, _, err = source.CreateForkedInstanceWithOptions(title, groupPath, opts)
-		}
-		if err != nil {
-			return sessionForkedMsg{err: fmt.Errorf("cannot create forked instance: %w", err), sourceID: sourceID}
-		}
-
-		if err := inst.Start(); err != nil {
-			return sessionForkedMsg{err: err, sourceID: sourceID}
-		}
-
-		switch inst.Tool {
-		case "claude":
-			_ = inst.WaitForClaudeSessionWithExclude(5*time.Second, usedIDs)
-		case "opencode":
-			go inst.DetectOpenCodeSession()
-		}
-
-		return sessionForkedMsg{instance: inst, sourceID: sourceID}
-	}
 }
 
 // sessionDeletedMsg signals that a session was deleted
@@ -5585,9 +5345,6 @@ func (h *Home) View() string {
 	}
 	if h.groupDialog.IsVisible() {
 		return h.groupDialog.View()
-	}
-	if h.forkDialog.IsVisible() {
-		return h.forkDialog.View()
 	}
 	if h.confirmDialog.IsVisible() {
 		return h.confirmDialog.View()
@@ -7031,7 +6788,7 @@ func (h *Home) renderLaunchingState(inst *session.Instance, width int, startTime
 	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
 	b.WriteString("\n\n")
 
-	// Elapsed time (consistent with MCP and Fork animations)
+	// Elapsed time (consistent with MCP animations)
 	elapsed := time.Since(startTime).Round(time.Second)
 	timeStyle := lipgloss.NewStyle().
 		Foreground(ColorYellow).
@@ -7085,59 +6842,6 @@ func (h *Home) renderMcpLoadingState(inst *session.Instance, width int, startTim
 	b.WriteString("\n\n")
 
 	// Elapsed time
-	elapsed := time.Since(startTime).Round(time.Second)
-	timeStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Italic(true)
-	b.WriteString(centerStyle.Render(timeStyle.Render(fmt.Sprintf("Loading... %s", elapsed))))
-
-	return b.String()
-}
-
-// renderForkingState renders the forking animation when session is being forked
-func (h *Home) renderForkingState(inst *session.Instance, width int, startTime time.Time) string {
-	var b strings.Builder
-
-	// Centered layout
-	centerStyle := lipgloss.NewStyle().
-		Width(width - 4).
-		Align(lipgloss.Center)
-
-	// Braille spinner frames
-	spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	spinner := spinnerFrames[h.animationFrame]
-
-	// Spinner with purple color (fork-themed)
-	spinnerStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple).
-		Bold(true)
-	spinnerLine := spinnerStyle.Render(spinner + "  " + spinner + "  " + spinner)
-	b.WriteString(centerStyle.Render(spinnerLine))
-	b.WriteString("\n\n")
-
-	// Forking title
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple).
-		Bold(true)
-	b.WriteString(centerStyle.Render(titleStyle.Render("🔀 Forking Session")))
-	b.WriteString("\n\n")
-
-	// Description
-	descStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
-	b.WriteString(centerStyle.Render(descStyle.Render("Creating a new Claude session from this conversation...")))
-	b.WriteString("\n\n")
-
-	// Progress dots animation
-	dotsCount := (h.animationFrame % 4) + 1
-	dots := strings.Repeat("●", dotsCount) + strings.Repeat("○", 4-dotsCount)
-	dotsStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple)
-	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
-	b.WriteString("\n\n")
-
-	// Elapsed time (consistent with other animations)
 	elapsed := time.Since(startTime).Round(time.Second)
 	timeStyle := lipgloss.NewStyle().
 		Foreground(ColorYellow).
@@ -7552,8 +7256,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// Check if session is launching/resuming (for animation priority)
 	_, isSessionLaunching := h.launchingSessions[selected.ID]
 	_, isSessionResuming := h.resumingSessions[selected.ID]
-	_, isSessionForking := h.forkingSessions[selected.ID]
-	isStartingUp := isSessionLaunching || isSessionResuming || isSessionForking
+	isStartingUp := isSessionLaunching || isSessionResuming
 
 	// If output is disabled AND not starting up, return early
 	// (We want to show the launch animation even if output is normally disabled)
@@ -7585,18 +7288,16 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	b.WriteString(termHeader)
 	b.WriteString("\n")
 
-	// Check if this session is launching (newly created), resuming (restarted), or forking
+	// Check if this session is launching (newly created), resuming (restarted)
 	launchTime, isLaunching := h.launchingSessions[selected.ID]
 	resumeTime, isResuming := h.resumingSessions[selected.ID]
 	mcpLoadTime, isMcpLoading := h.mcpLoadingSessions[selected.ID]
-	forkTime, isForking := h.forkingSessions[selected.ID]
 
-	// Determine if we should show animation (launch, resume, MCP loading, or forking)
+	// Determine if we should show animation (launch, resume, MCP loading)
 	// For Claude: show for minimum 6 seconds, then check for ready indicators
 	// For others: show for first 3 seconds after creation
 	showLaunchingAnimation := false
 	showMcpLoadingAnimation := false
-	showForkingAnimation := isForking // Show forking animation immediately
 	var animationStartTime time.Time
 	if isLaunching {
 		animationStartTime = launchTime
@@ -7674,11 +7375,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	preview, hasCached := h.previewCache[selected.ID]
 	h.previewCacheMu.RUnlock()
 
-	// Show forking animation when fork is in progress (highest priority)
-	if showForkingAnimation {
-		b.WriteString("\n")
-		b.WriteString(h.renderForkingState(selected, width, forkTime))
-	} else if showMcpLoadingAnimation {
+	if showMcpLoadingAnimation {
 		// Show MCP loading animation when reloading MCPs
 		b.WriteString("\n")
 		b.WriteString(h.renderMcpLoadingState(selected, width, mcpLoadTime))

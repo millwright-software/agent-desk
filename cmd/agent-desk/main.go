@@ -29,7 +29,7 @@ import (
 	"github.com/millwright-software/agent-desk/internal/update"
 )
 
-const Version = "1.0.6"
+const Version = "1.0.7"
 
 // Table column widths for list command output
 const (
@@ -1730,7 +1730,6 @@ func printHelp() {
 	fmt.Println("  session start <id>        Start a session's tmux process")
 	fmt.Println("  session stop <id>         Stop session process")
 	fmt.Println("  session restart <id>      Restart session (reload MCPs)")
-	fmt.Println("  session fork <id>         Fork Claude session with context")
 	fmt.Println("  session attach <id>       Attach to session interactively")
 	fmt.Println("  session show [id]         Show session details")
 	fmt.Println()

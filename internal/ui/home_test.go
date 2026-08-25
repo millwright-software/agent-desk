@@ -578,14 +578,13 @@ func TestRenderHelpBarCompactWithSession(t *testing.T) {
 	home.width = 85 // Compact mode (70-99)
 	home.height = 30
 
-	// Add a session with fork capability
-	// ClaudeDetectedAt must be recent for CanFork() to return true
+	// Add a claude session so claude-specific hints (e.g. MCP) surface.
 	testSession := &session.Instance{
 		ID:               "test-123",
 		Title:            "Test Session",
 		Tool:             "claude",
 		ClaudeSessionID:  "session-abc",
-		ClaudeDetectedAt: time.Now(), // Must be recent for CanFork()
+		ClaudeDetectedAt: time.Now(),
 	}
 	home.flatItems = []session.Item{
 		{Type: session.ItemTypeSession, Session: testSession},
@@ -602,8 +601,6 @@ func TestRenderHelpBarCompactWithSession(t *testing.T) {
 		t.Error("Compact help bar should contain 'Restart'")
 	}
 	// Claude sessions surface the MCP hint in the compact bar.
-	// (Fork was intentionally dropped from the compact tier in the shortcut
-	// declutter; it remains in the full help bar / help overlay.)
 	if !strings.Contains(result, "MCP") {
 		t.Error("Compact help bar should contain 'MCP' for a claude session")
 	}

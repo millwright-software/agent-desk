@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/millwright-software/agent-desk/internal/clipboard"
-	"github.com/millwright-software/agent-desk/internal/git"
 	"github.com/millwright-software/agent-desk/internal/profile"
 	"github.com/millwright-software/agent-desk/internal/session"
 	"github.com/millwright-software/agent-desk/internal/tmux"
@@ -31,8 +29,6 @@ func handleSession(profile string, args []string) {
 		handleSessionStop(profile, args[1:])
 	case "restart":
 		handleSessionRestart(profile, args[1:])
-	case "fork":
-		handleSessionFork(profile, args[1:])
 	case "attach":
 		handleSessionAttach(profile, args[1:])
 	case "show":
@@ -68,7 +64,6 @@ func printSessionHelp() {
 	fmt.Println("  start <id>              Start a session's tmux process")
 	fmt.Println("  stop <id>               Stop/kill session process")
 	fmt.Println("  restart <id>            Restart session (Claude: reload MCPs)")
-	fmt.Println("  fork <id>               Fork Claude session with context")
 	fmt.Println("  attach <id>             Attach to session interactively")
 	fmt.Println("  show [id]               Show session details (auto-detect current if no id)")
 	fmt.Println("  current                 Show current session and profile (auto-detect)")
@@ -87,7 +82,6 @@ func printSessionHelp() {
 	fmt.Println("  agent-desk session start my-project")
 	fmt.Println("  agent-desk session stop abc123")
 	fmt.Println("  agent-desk session restart my-project")
-	fmt.Println("  agent-desk session fork my-project -t \"my-project-fork\"")
 	fmt.Println("  agent-desk session attach my-project")
 	fmt.Println("  agent-desk session show                  # Auto-detect current session")
 	fmt.Println("  agent-desk session show my-project --json")
@@ -102,7 +96,7 @@ func printSessionHelp() {
 	fmt.Println("  command            Command to run")
 	fmt.Println("  tool               Tool type (claude, gemini, shell, etc.)")
 	fmt.Println("  wrapper            Wrapper command (use {command} to include tool command)")
-	fmt.Println("  claude-session-id  Claude conversation ID (for fork/resume)")
+	fmt.Println("  claude-session-id  Claude conversation ID (for resume)")
 	fmt.Println("  gemini-session-id  Gemini conversation ID (for resume)")
 	fmt.Println()
 	fmt.Println("Set examples:")
@@ -349,200 +343,6 @@ func handleSessionRestart(profile string, args []string) {
 	})
 }
 
-// handleSessionFork forks a Claude session
-func handleSessionFork(profile string, args []string) {
-	fs := flag.NewFlagSet("session fork", flag.ExitOnError)
-	jsonOutput := fs.Bool("json", false, "Output as JSON")
-	quiet := fs.Bool("quiet", false, "Minimal output")
-	quietShort := fs.Bool("q", false, "Minimal output (short)")
-	title := fs.String("title", "", "Title for forked session")
-	titleShort := fs.String("t", "", "Title for forked session (short)")
-	group := fs.String("group", "", "Group for forked session")
-	groupShort := fs.String("g", "", "Group for forked session (short)")
-	worktreeBranch := fs.String("w", "", "Create fork in git worktree for branch")
-	worktreeBranchLong := fs.String("worktree", "", "Create fork in git worktree for branch")
-	newBranch := fs.Bool("b", false, "Create new branch (use with --worktree)")
-	newBranchLong := fs.Bool("new-branch", false, "Create new branch")
-
-	fs.Usage = func() {
-		fmt.Println("Usage: agent-desk session fork <id|title> [options]")
-		fmt.Println()
-		fmt.Println("Fork a Claude session with conversation context.")
-		fmt.Println()
-		fmt.Println("Options:")
-		fs.PrintDefaults()
-		fmt.Println()
-		fmt.Println("Examples:")
-		fmt.Println("  agent-desk session fork my-project")
-		fmt.Println("  agent-desk session fork my-project -t \"my-fork\"")
-		fmt.Println("  agent-desk session fork my-project -t \"my-fork\" -g \"experiments\"")
-		fmt.Println("  agent-desk session fork my-project -w fork/experiment")
-		fmt.Println("  agent-desk session fork my-project -w fork/new-idea -b")
-	}
-
-	if err := fs.Parse(normalizeArgs(fs, args)); err != nil {
-		os.Exit(1)
-	}
-
-	identifier := fs.Arg(0)
-	quietMode := *quiet || *quietShort
-	out := NewCLIOutput(*jsonOutput, quietMode)
-
-	// Merge short and long flags
-	forkTitle := mergeFlags(*title, *titleShort)
-	forkGroup := mergeFlags(*group, *groupShort)
-
-	// Load sessions
-	storage, instances, groupsData, err := loadSessionData(profile)
-	if err != nil {
-		out.Error(err.Error(), ErrCodeNotFound)
-		os.Exit(1)
-	}
-
-	// Resolve session
-	inst, errMsg, errCode := ResolveSession(identifier, instances)
-	if inst == nil {
-		out.Error(errMsg, errCode)
-		if errCode == ErrCodeNotFound {
-			os.Exit(2)
-		}
-		os.Exit(1)
-		return // unreachable, satisfies staticcheck SA5011
-	}
-
-	// Verify it's a Claude session
-	if inst.Tool != "claude" {
-		out.Error(
-			fmt.Sprintf("session '%s' is not a Claude session (tool: %s)", inst.Title, inst.Tool),
-			ErrCodeInvalidOperation,
-		)
-		os.Exit(1)
-	}
-
-	// Try to capture session ID from tmux if missing (handles pre-fix sessions)
-	if inst.ClaudeSessionID == "" && inst.Exists() {
-		inst.PostStartSync(2 * time.Second)
-	}
-
-	// Verify it can be forked
-	if !inst.CanFork() {
-		out.Error(
-			fmt.Sprintf("session '%s' cannot be forked: no active Claude session ID", inst.Title),
-			ErrCodeInvalidOperation,
-		)
-		os.Exit(1)
-	}
-
-	// Default title if not provided
-	if forkTitle == "" {
-		forkTitle = inst.Title + "-fork"
-	}
-
-	// Default group to parent's group
-	if forkGroup == "" {
-		forkGroup = inst.GroupPath
-	}
-
-	// Resolve worktree flags
-	wtBranch := *worktreeBranch
-	if *worktreeBranchLong != "" {
-		wtBranch = *worktreeBranchLong
-	}
-	createNewBranch := *newBranch || *newBranchLong
-
-	// Handle worktree creation
-	var opts *session.ClaudeOptions
-	if wtBranch != "" {
-		if !git.IsGitRepo(inst.ProjectPath) {
-			out.Error("session path is not a git repository", ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-		repoRoot, err := git.GetRepoRoot(inst.ProjectPath)
-		if err != nil {
-			out.Error(fmt.Sprintf("failed to get repo root: %v", err), ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-
-		if !createNewBranch && !git.BranchExists(repoRoot, wtBranch) {
-			out.Error(fmt.Sprintf("branch '%s' does not exist (use -b to create)", wtBranch), ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-
-		wtSettings := session.GetWorktreeSettings()
-		worktreePath := git.WorktreePath(git.WorktreePathOptions{
-			Branch:    wtBranch,
-			Location:  wtSettings.DefaultLocation,
-			RepoDir:   repoRoot,
-			SessionID: git.GeneratePathID(),
-			Template:  wtSettings.Template(),
-		})
-
-		if _, statErr := os.Stat(worktreePath); statErr == nil {
-			out.Error(fmt.Sprintf("worktree path already exists: %s", worktreePath), ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
-			out.Error(fmt.Sprintf("failed to create directory: %v", err), ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-
-		if err := git.CreateWorktree(repoRoot, worktreePath, wtBranch); err != nil {
-			out.Error(fmt.Sprintf("worktree creation failed: %v", err), ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-
-		userConfig, _ := session.LoadUserConfig()
-		opts = session.NewClaudeOptions(userConfig)
-		opts.WorkDir = worktreePath
-		opts.WorktreePath = worktreePath
-		opts.WorktreeRepoRoot = repoRoot
-		opts.WorktreeBranch = wtBranch
-	}
-
-	// Create the forked instance
-	forkedInst, _, err := inst.CreateForkedInstanceWithOptions(forkTitle, forkGroup, opts)
-	if err != nil {
-		out.Error(fmt.Sprintf("failed to create fork: %v", err), ErrCodeInvalidOperation)
-		os.Exit(1)
-	}
-
-	// Start the forked session
-	if err := forkedInst.Start(); err != nil {
-		out.Error(fmt.Sprintf("failed to start forked session: %v", err), ErrCodeInvalidOperation)
-		os.Exit(1)
-	}
-
-	// Capture forked session's new session ID
-	forkedInst.PostStartSync(3 * time.Second)
-
-	// Add to instances
-	instances = append(instances, forkedInst)
-
-	// Rebuild group tree and ensure group exists
-	groupTree := session.NewGroupTreeWithGroups(instances, groupsData)
-	if forkedInst.GroupPath != "" {
-		groupTree.CreateGroup(forkedInst.GroupPath)
-	}
-
-	// Save
-	if err := storage.SaveWithGroups(instances, groupTree); err != nil {
-		out.Error(fmt.Sprintf("failed to save: %v", err), ErrCodeInvalidOperation)
-		os.Exit(1)
-	}
-
-	// Output success
-	out.Success(
-		fmt.Sprintf("Forked session: %s -> %s (%s)", inst.Title, forkedInst.Title, TruncateID(forkedInst.ID)),
-		map[string]interface{}{
-			"success":   true,
-			"parent_id": inst.ID,
-			"new_id":    forkedInst.ID,
-			"new_title": forkedInst.Title,
-		},
-	)
-}
-
 // handleSessionAttach attaches to a session interactively
 func handleSessionAttach(profile string, args []string) {
 	fs := flag.NewFlagSet("session attach", flag.ExitOnError)
@@ -689,7 +489,6 @@ func handleSessionShow(profile string, args []string) {
 
 	if inst.Tool == "claude" {
 		jsonData["claude_session_id"] = inst.ClaudeSessionID
-		jsonData["can_fork"] = inst.CanFork()
 		jsonData["can_restart"] = inst.CanRestart()
 
 		if mcpInfo != nil && mcpInfo.HasAny() {
@@ -733,11 +532,7 @@ func handleSessionShow(profile string, args []string) {
 			if len(truncatedID) > 36 {
 				truncatedID = truncatedID[:36] + "..."
 			}
-			canForkStr := "no"
-			if inst.CanFork() {
-				canForkStr = "yes"
-			}
-			sb.WriteString(fmt.Sprintf("Claude:  session_id=%s (can fork: %s)\n", truncatedID, canForkStr))
+			sb.WriteString(fmt.Sprintf("Claude:  session_id=%s\n", truncatedID))
 		} else {
 			sb.WriteString("Claude:  no session ID detected\n")
 		}

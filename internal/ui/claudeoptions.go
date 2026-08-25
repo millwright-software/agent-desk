@@ -10,7 +10,7 @@ import (
 )
 
 // ClaudeOptionsPanel is a UI panel for Claude-specific launch options
-// Used in both ForkDialog and NewDialog
+// Used in NewDialog
 type ClaudeOptionsPanel struct {
 	// Session mode: 0=new, 1=continue, 2=resume
 	sessionMode int
@@ -22,8 +22,6 @@ type ClaudeOptionsPanel struct {
 	useTeammateMode bool
 	// Focus tracking
 	focusIndex int
-	// Whether this panel is for fork dialog (fewer options)
-	isForkMode bool
 	// Total number of focusable elements
 	focusCount int
 }
@@ -33,10 +31,6 @@ type ClaudeOptionsPanel struct {
 // 1: Resume ID input (only when mode=resume)
 // 2: Skip permissions checkbox
 // 3: Chrome checkbox
-
-// Focus indices for ForkDialog mode:
-// 0: Skip permissions checkbox
-// 1: Chrome checkbox
 
 // NewClaudeOptionsPanel creates a new panel for NewDialog
 func NewClaudeOptionsPanel() *ClaudeOptionsPanel {
@@ -48,18 +42,7 @@ func NewClaudeOptionsPanel() *ClaudeOptionsPanel {
 	return &ClaudeOptionsPanel{
 		sessionMode:   0, // new
 		resumeIDInput: resumeInput,
-		isForkMode:    false,
 		focusCount:    5, // Will adjust dynamically
-	}
-}
-
-// NewClaudeOptionsPanelForFork creates a panel for ForkDialog (fewer options)
-func NewClaudeOptionsPanelForFork() *ClaudeOptionsPanel {
-	return &ClaudeOptionsPanel{
-		sessionMode:   0,
-		resumeIDInput: textinput.New(), // Not used in fork mode
-		isForkMode:    true,
-		focusCount:    3, // skip, chrome, teammate
 	}
 }
 
@@ -100,16 +83,14 @@ func (p *ClaudeOptionsPanel) GetOptions() *session.ClaudeOptions {
 		UseTeammateMode: p.useTeammateMode,
 	}
 
-	if !p.isForkMode {
-		switch p.sessionMode {
-		case 0:
-			opts.SessionMode = "new"
-		case 1:
-			opts.SessionMode = "continue"
-		case 2:
-			opts.SessionMode = "resume"
-			opts.ResumeSessionID = p.resumeIDInput.Value()
-		}
+	switch p.sessionMode {
+	case 0:
+		opts.SessionMode = "new"
+	case 1:
+		opts.SessionMode = "continue"
+	case 2:
+		opts.SessionMode = "resume"
+		opts.ResumeSessionID = p.resumeIDInput.Value()
 	}
 
 	return opts
@@ -119,13 +100,11 @@ func (p *ClaudeOptionsPanel) GetOptions() *session.ClaudeOptions {
 func (p *ClaudeOptionsPanel) SummaryView() string {
 	var parts []string
 
-	if !p.isForkMode {
-		switch p.sessionMode {
-		case 1:
-			parts = append(parts, "continue")
-		case 2:
-			parts = append(parts, "resume")
-		}
+	switch p.sessionMode {
+	case 1:
+		parts = append(parts, "continue")
+	case 2:
+		parts = append(parts, "resume")
 	}
 
 	if p.skipPermissions {
@@ -184,7 +163,7 @@ func (p *ClaudeOptionsPanel) Update(msg tea.Msg) tea.Cmd {
 
 		case "left", "right":
 			// For session mode radio buttons
-			if !p.isForkMode && p.focusIndex == 0 {
+			if p.focusIndex == 0 {
 				if msg.String() == "left" {
 					p.sessionMode--
 					if p.sessionMode < 0 {
@@ -210,77 +189,50 @@ func (p *ClaudeOptionsPanel) Update(msg tea.Msg) tea.Cmd {
 
 // handleSpaceKey handles space key for toggling checkboxes/radios
 func (p *ClaudeOptionsPanel) handleSpaceKey() {
-	if p.isForkMode {
-		switch p.focusIndex {
-		case 0:
-			p.skipPermissions = !p.skipPermissions
-		case 1:
-			p.useChrome = !p.useChrome
-		case 2:
-			p.useTeammateMode = !p.useTeammateMode
-		}
-	} else {
-		// NewDialog mode
-		switch p.getFocusType() {
-		case "sessionMode":
-			// Cycle through modes on space
-			p.sessionMode = (p.sessionMode + 1) % 3
-		case "skipPermissions":
-			p.skipPermissions = !p.skipPermissions
-		case "chrome":
-			p.useChrome = !p.useChrome
-		case "teammateMode":
-			p.useTeammateMode = !p.useTeammateMode
-		}
+	switch p.getFocusType() {
+	case "sessionMode":
+		// Cycle through modes on space
+		p.sessionMode = (p.sessionMode + 1) % 3
+	case "skipPermissions":
+		p.skipPermissions = !p.skipPermissions
+	case "chrome":
+		p.useChrome = !p.useChrome
+	case "teammateMode":
+		p.useTeammateMode = !p.useTeammateMode
 	}
 }
 
 // getFocusType returns what type of element is currently focused
 func (p *ClaudeOptionsPanel) getFocusType() string {
-	if p.isForkMode {
-		switch p.focusIndex {
-		case 0:
-			return "skipPermissions"
-		case 1:
-			return "chrome"
-		case 2:
-			return "teammateMode"
-		}
-	} else {
-		idx := p.focusIndex
-		// 0: session mode
-		if idx == 0 {
-			return "sessionMode"
-		}
-		// 1: resume input (only if mode == resume)
-		if p.sessionMode == 2 {
-			if idx == 1 {
-				return "resumeInput"
-			}
-			idx-- // Adjust for missing resume input
-		}
-		// 2: skip permissions
+	idx := p.focusIndex
+	// 0: session mode
+	if idx == 0 {
+		return "sessionMode"
+	}
+	// 1: resume input (only if mode == resume)
+	if p.sessionMode == 2 {
 		if idx == 1 {
-			return "skipPermissions"
+			return "resumeInput"
 		}
-		// 3: chrome
-		if idx == 2 {
-			return "chrome"
-		}
-		// 4: teammate mode
-		if idx == 3 {
-			return "teammateMode"
-		}
+		idx-- // Adjust for missing resume input
+	}
+	// 2: skip permissions
+	if idx == 1 {
+		return "skipPermissions"
+	}
+	// 3: chrome
+	if idx == 2 {
+		return "chrome"
+	}
+	// 4: teammate mode
+	if idx == 3 {
+		return "teammateMode"
 	}
 	return ""
 }
 
 // getFocusCount returns the number of focusable elements
 func (p *ClaudeOptionsPanel) getFocusCount() int {
-	if p.isForkMode {
-		return 3 // skip, chrome, teammate
-	}
-
 	count := 4 // session mode, skip, chrome, teammate
 	if p.sessionMode == 2 {
 		count++ // resume input
@@ -290,7 +242,7 @@ func (p *ClaudeOptionsPanel) getFocusCount() int {
 
 // isResumeInputFocused returns true if resume input is focused
 func (p *ClaudeOptionsPanel) isResumeInputFocused() bool {
-	return !p.isForkMode && p.sessionMode == 2 && p.focusIndex == 1
+	return p.sessionMode == 2 && p.focusIndex == 1
 }
 
 // updateInputFocus updates which text input has focus
@@ -309,25 +261,7 @@ func (p *ClaudeOptionsPanel) View() string {
 	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
 	headerStyle := lipgloss.NewStyle().Foreground(ColorComment)
 
-	var content string
-
-	if p.isForkMode {
-		content = p.viewForkMode(labelStyle, activeStyle, dimStyle, headerStyle)
-	} else {
-		content = p.viewNewMode(labelStyle, activeStyle, dimStyle, headerStyle)
-	}
-
-	return content
-}
-
-// viewForkMode renders options for ForkDialog
-func (p *ClaudeOptionsPanel) viewForkMode(labelStyle, activeStyle, dimStyle, headerStyle lipgloss.Style) string {
-	var content string
-	content += headerStyle.Render("─ Advanced Options ─") + "\n"
-	content += renderCheckboxLine("Skip permissions", p.skipPermissions, p.focusIndex == 0)
-	content += renderCheckboxLine("Chrome mode", p.useChrome, p.focusIndex == 1)
-	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == 2)
-	return content
+	return p.viewNewMode(labelStyle, activeStyle, dimStyle, headerStyle)
 }
 
 // viewNewMode renders options for NewDialog
