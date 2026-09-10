@@ -1,4 +1,4 @@
-.PHONY: build run install clean dev release-local test fmt lint ci
+.PHONY: build run install uninstall which clean dev release-local test fmt lint ci
 
 BINARY_NAME=agent-desk
 BUILD_DIR=./build
@@ -13,29 +13,48 @@ build:
 run:
 	go run ./cmd/agent-desk
 
-# Install to /usr/local/bin (requires sudo)
-install: build
-	sudo cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/$(BINARY_NAME)
-	@echo "✅ Installed to /usr/local/bin/$(BINARY_NAME)"
+# Where `go install` puts things: $GOBIN if set, else $GOPATH/bin.
+GOBIN_DIR := $(shell go env GOBIN)
+ifeq ($(GOBIN_DIR),)
+GOBIN_DIR := $(shell go env GOPATH)/bin
+endif
+
+# Install to the Go bin directory — the one `go install` already uses, and the
+# one a Go developer's PATH already contains. No sudo.
+#
+# It used to `sudo cp` into /usr/local/bin while `go install` wrote to
+# $GOPATH/bin, so a machine could end up with two agent-desk binaries in two
+# directories and whichever came first on PATH won. That is not hypothetical:
+# it left a month-old binary shadowed behind a current one, and a debugging
+# session was spent on symptoms that had been fixed in a build the shell was
+# not running. One destination, one answer to "which one am I running".
+install:
+	go install ./cmd/agent-desk
+	@echo "✅ Installed to $(GOBIN_DIR)/$(BINARY_NAME)"
+	@echo "   (make sure $(GOBIN_DIR) is on your PATH)"
 	@echo "Run 'agent-desk' to start"
 
-# Install to user's local bin (no sudo required)
-install-user: build
-	mkdir -p $(HOME)/.local/bin
-	cp $(BUILD_DIR)/$(BINARY_NAME) $(HOME)/.local/bin/$(BINARY_NAME)
-	@echo "✅ Installed to $(HOME)/.local/bin/$(BINARY_NAME)"
-	@echo "Make sure $(HOME)/.local/bin is in your PATH"
-	@echo "Run 'agent-desk' to start"
-
-# Uninstall from /usr/local/bin
+# Remove it from the Go bin directory, and report any copy left behind in the
+# two places older versions of this Makefile installed to — a stale one there
+# silently wins if it sits earlier on PATH.
 uninstall:
-	sudo rm -f /usr/local/bin/$(BINARY_NAME)
-	@echo "✅ Uninstalled $(BINARY_NAME)"
+	rm -f $(GOBIN_DIR)/$(BINARY_NAME)
+	@echo "✅ Removed $(GOBIN_DIR)/$(BINARY_NAME)"
+	@if [ -e /usr/local/bin/$(BINARY_NAME) ]; then \
+		echo "⚠️  Another copy is at /usr/local/bin/$(BINARY_NAME) (needs sudo):"; \
+		echo "      sudo rm /usr/local/bin/$(BINARY_NAME)"; \
+	fi
+	@if [ -e $(HOME)/.local/bin/$(BINARY_NAME) ]; then \
+		echo "⚠️  Another copy is at $(HOME)/.local/bin/$(BINARY_NAME):"; \
+		echo "      rm $(HOME)/.local/bin/$(BINARY_NAME)"; \
+	fi
 
-# Uninstall from user's local bin
-uninstall-user:
-	rm -f $(HOME)/.local/bin/$(BINARY_NAME)
-	@echo "✅ Uninstalled $(BINARY_NAME)"
+# Report every agent-desk on this machine and which one the shell would run.
+which:
+	@echo "PATH would run: $$(command -v $(BINARY_NAME) || echo '<none>')"
+	@for d in $(GOBIN_DIR) /usr/local/bin $(HOME)/.local/bin; do \
+		[ -e "$$d/$(BINARY_NAME)" ] && echo "  found: $$d/$(BINARY_NAME)"; \
+	done; true
 
 # Clean build artifacts
 clean:

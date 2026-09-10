@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/millwright-software/agent-desk/internal/logging"
 	"github.com/fsnotify/fsnotify"
+	"github.com/millwright-software/agent-desk/internal/logging"
 	"github.com/sahilm/fuzzy"
 	"golang.org/x/time/rate"
 )

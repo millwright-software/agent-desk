@@ -191,10 +191,53 @@ func (d *NewDialog) GetSelectedGroup() string {
 	return d.parentGroupPath
 }
 
+// dialogWidthFor returns the dialog's outer width for a terminal of the given
+// width, and the number of cells a text input inside it may use.
+//
+// ⚠️ THE INPUT WAS A FIXED 40 COLUMNS AND THE DIALOG NEVER GREW. Width was
+// set once at construction and never revisited, while the dialog itself only
+// ever SHRANK from 60 -- it had no branch that widened on a large terminal. A
+// project path is routinely longer than 40 cells (a worktree path on this
+// machine is 66), so the value scrolled horizontally inside a window narrower
+// than the box drawn around it: the text appeared cut off on the right, and the
+// only way to read the end was to arrow to it. The box looked wrong because the
+// field inside it was sized independently of the box.
+func dialogWidthFor(termWidth int) (dialog, input int) {
+	dialog = 60
+	if termWidth > 0 {
+		if termWidth < dialog+10 {
+			dialog = termWidth - 10
+		} else if grown := termWidth - 20; grown > dialog {
+			// Grow on a wide terminal so long paths are readable without
+			// scrolling, but stop well short of the full width -- a dialog
+			// spanning the whole screen reads worse than one that does not.
+			dialog = grown
+			if dialog > 110 {
+				dialog = 110
+			}
+		}
+	}
+	if dialog < 40 {
+		dialog = 40
+	}
+	// Inside the border and its padding.
+	input = dialog - 8
+	if input < 20 {
+		input = 20
+	}
+	return dialog, input
+}
+
 // SetSize sets the dialog dimensions
 func (d *NewDialog) SetSize(width, height int) {
 	d.width = width
 	d.height = height
+	// ⚠️ RESIZE THE INPUTS TOO. Setting only the dialog's width left the
+	// fields at their construction-time size, which is the whole bug.
+	_, inputWidth := dialogWidthFor(width)
+	d.pathInput.Width = inputWidth
+	d.nameInput.Width = inputWidth
+	d.commandInput.Width = inputWidth
 }
 
 // SetPathSuggestions sets the available path suggestions for autocomplete
@@ -788,14 +831,9 @@ func (d *NewDialog) View() string {
 	dimStyle := lipgloss.NewStyle().
 		Foreground(ColorComment)
 
-	// Responsive dialog width
-	dialogWidth := 60
-	if d.width > 0 && d.width < dialogWidth+10 {
-		dialogWidth = d.width - 10
-		if dialogWidth < 40 {
-			dialogWidth = 40
-		}
-	}
+	// Responsive dialog width -- shared with SetSize so the box and the fields
+	// inside it can never be sized from different arithmetic.
+	dialogWidth, _ := dialogWidthFor(d.width)
 
 	dialogStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

@@ -290,5 +290,5 @@ Agent Desk is a private rename-fork of
 [`asheshgoplani/agent-deck`](https://github.com/asheshgoplani/agent-deck) (the
 `upstream` remote), branched at ~v0.17. It intentionally stays lighter than
 current upstream (no cost dashboard, web mode, Docker sandbox, OpenClaw, or remote
-SSH — those landed upstream after the fork point). See `td.md` for the upstream
+SSH — those landed upstream after the fork point). See the local `td.md` board for the upstream
 sync notes.

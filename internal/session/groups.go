@@ -680,6 +680,9 @@ func sanitizeGroupName(name string) string {
 
 // CreateGroup creates a new empty group
 func (t *GroupTree) CreateGroup(name string) *Group {
+	// Sanitized like session titles: a composed emoji in a group
+	// name mis-measures exactly the same way and breaks the same frame.
+	name = SanitizeDisplayName(name)
 	// Sanitize name to prevent path traversal and security issues
 	sanitizedName := sanitizeGroupName(name)
 	path := strings.ToLower(strings.ReplaceAll(sanitizedName, " ", "-"))
@@ -710,6 +713,9 @@ func (t *GroupTree) CreateGroup(name string) *Group {
 
 // CreateSubgroup creates a new empty group under a parent group
 func (t *GroupTree) CreateSubgroup(parentPath, name string) *Group {
+	// Sanitized like session titles: a composed emoji in a group
+	// name mis-measures exactly the same way and breaks the same frame.
+	name = SanitizeDisplayName(name)
 	// Sanitize name to prevent path traversal and security issues
 	sanitizedName := sanitizeGroupName(name)
 	childPath := strings.ToLower(strings.ReplaceAll(sanitizedName, " ", "-"))
@@ -742,6 +748,9 @@ func (t *GroupTree) CreateSubgroup(parentPath, name string) *Group {
 
 // RenameGroup renames a group and updates all subgroups
 func (t *GroupTree) RenameGroup(oldPath, newName string) {
+	// Sanitized like session titles: a composed emoji in a group
+	// name mis-measures exactly the same way and breaks the same frame.
+	newName = SanitizeDisplayName(newName)
 	group, exists := t.Groups[oldPath]
 	if !exists {
 		return

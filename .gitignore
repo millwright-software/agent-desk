@@ -48,3 +48,12 @@ Thumbs.db
 
 .worktrees
 agent-desk-test
+
+# goreleaser build output — 24MB of archives, rebuilt on every release.
+dist/
+
+# The working board — local only, not project history.
+td.md
+
+# Upstream demo media (130MB). Not referenced by the README.
+demos/

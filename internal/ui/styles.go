@@ -20,7 +20,7 @@ var currentTheme Theme = ThemeDark
 
 // Dark Theme - Tokyo Night
 var darkColors = struct {
-	Bg, Surface, Border, Text, TextDim   lipgloss.Color
+	Bg, Surface, Border, Text, TextDim    lipgloss.Color
 	Accent, Purple, Cyan, Green, GreenDim lipgloss.Color
 	Yellow, Orange, Red, Comment          lipgloss.Color
 }{
@@ -42,7 +42,7 @@ var darkColors = struct {
 
 // Light Theme - Tokyo Night Light variant
 var lightColors = struct {
-	Bg, Surface, Border, Text, TextDim   lipgloss.Color
+	Bg, Surface, Border, Text, TextDim    lipgloss.Color
 	Accent, Purple, Cyan, Green, GreenDim lipgloss.Color
 	Yellow, Orange, Red, Comment          lipgloss.Color
 }{
@@ -64,20 +64,20 @@ var lightColors = struct {
 
 // Active color variables (set by InitTheme)
 var (
-	ColorBg      lipgloss.Color
-	ColorSurface lipgloss.Color
-	ColorBorder  lipgloss.Color
-	ColorText    lipgloss.Color
-	ColorTextDim lipgloss.Color
-	ColorAccent  lipgloss.Color
+	ColorBg       lipgloss.Color
+	ColorSurface  lipgloss.Color
+	ColorBorder   lipgloss.Color
+	ColorText     lipgloss.Color
+	ColorTextDim  lipgloss.Color
+	ColorAccent   lipgloss.Color
 	ColorPurple   lipgloss.Color
 	ColorCyan     lipgloss.Color
 	ColorGreen    lipgloss.Color
 	ColorGreenDim lipgloss.Color
 	ColorYellow   lipgloss.Color
-	ColorOrange  lipgloss.Color
-	ColorRed     lipgloss.Color
-	ColorComment lipgloss.Color
+	ColorOrange   lipgloss.Color
+	ColorRed      lipgloss.Color
+	ColorComment  lipgloss.Color
 )
 
 // themeMu protects global color/style variables during live theme switches.
@@ -250,11 +250,13 @@ var (
 	SessionStatusSelStyle   lipgloss.Style
 
 	// Session title styles by state
-	SessionTitleDefault  lipgloss.Style
-	SessionTitleActive   lipgloss.Style
-	SessionTitleError    lipgloss.Style
-	SessionTitleParked   lipgloss.Style
-	SessionTitleSelStyle lipgloss.Style
+	SessionTitleDefault    lipgloss.Style
+	SessionTitleActive     lipgloss.Style
+	SessionTitleError      lipgloss.Style
+	SessionTitleUnread     lipgloss.Style
+	SessionTitleParkedRed  lipgloss.Style
+	SessionTitleParkedBlue lipgloss.Style
+	SessionTitleSelStyle   lipgloss.Style
 
 	// Selection indicator
 	SessionSelectionPrefix lipgloss.Style
@@ -510,7 +512,12 @@ func initStyles() {
 	SessionTitleDefault = lipgloss.NewStyle().Foreground(ColorText)
 	SessionTitleActive = lipgloss.NewStyle().Foreground(ColorText).Bold(true)
 	SessionTitleError = lipgloss.NewStyle().Foreground(ColorText).Underline(true)
-	SessionTitleParked = lipgloss.NewStyle().Foreground(ColorTextDim).Faint(true) // manually parked
+	// u-key marker titles echo their dot's color so the whole row reads at a
+	// glance: unread = bold light green ("waiting to be read"), parked red =
+	// dim red at regular weight, parked blue = italic dim blue (soft hold).
+	SessionTitleUnread = lipgloss.NewStyle().Foreground(ColorGreenDim).Bold(true)
+	SessionTitleParkedRed = lipgloss.NewStyle().Foreground(ColorRed).Faint(true)
+	SessionTitleParkedBlue = lipgloss.NewStyle().Foreground(ColorAccent).Faint(true).Italic(true)
 	SessionTitleSelStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorBg).Background(ColorAccent)
 
 	// Selection indicator

@@ -422,8 +422,8 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 
 		instances[i] = &InstanceData{
 			ID:                 r.ID,
-			Title:              r.Title,
-			ProjectPath:        r.ProjectPath,
+			Title:              SanitizeDisplayName(r.Title),
+			ProjectPath:        normalizeProjectPath(r.ProjectPath),
 			GroupPath:          r.GroupPath,
 			Order:              r.Order,
 			ParentSessionID:    r.ParentSessionID,
@@ -507,8 +507,8 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 
 		data.Instances[i] = &InstanceData{
 			ID:                 r.ID,
-			Title:              r.Title,
-			ProjectPath:        r.ProjectPath,
+			Title:              SanitizeDisplayName(r.Title),
+			ProjectPath:        normalizeProjectPath(r.ProjectPath),
 			GroupPath:          r.GroupPath,
 			Order:              r.Order,
 			ParentSessionID:    r.ParentSessionID,

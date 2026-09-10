@@ -5,9 +5,44 @@ All notable changes to this fork of Agent Desk are documented here.
 This is a [Millwright Software](https://github.com/millwright-software) fork of
 [`asheshgoplani/agent-deck`](https://github.com/asheshgoplani/agent-deck). The pre-fork release history lives
 upstream; this file tracks changes made in the fork. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); no versioned release has been cut yet.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Releases are tagged and published at
+[millwright-software/agent-desk/releases](https://github.com/millwright-software/agent-desk/releases);
+the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset attached to the latest one.
 
 ## [Unreleased]
+
+## [1.0.8] - 2026-09-09
+
+### Added
+- **Switch sessions from inside an attached session** with `Shift+Right` / `Shift+Left`. The ring follows the
+  order shown in the sidebar — including group ordering you arranged yourself — skips sessions whose tmux
+  session is gone, crosses group boundaries rather than stopping at them, and wraps both ways. With only one
+  live session it returns you to the list instead of silently re-attaching, which would look like the key did
+  nothing.
+  ⚠️ Not `Shift+]` / `Shift+[`: in a terminal those *are* `}` and `{` (bytes `0x7D`/`0x7B`), and agent-desk
+  proxies the PTY, so binding them would swallow every brace typed into every session.
+
+### Fixed
+- **`ProjectPath` is normalized on the way in, so the database stops storing dirty paths.** It used to be stored
+  exactly as it arrived and cleaned only where someone remembered to compare it — `isDuplicateSession` trimmed a
+  trailing slash before comparing, which means the value was known to be wrong at rest and every other reader was
+  left to rediscover that. The ones that didn't were silently wrong: the `.claude.json` lookup in
+  `GetClaudeSessionID`, the CLI's `inst.ProjectPath == identifier`, and experiment path matching all compare
+  exact strings. Normalizing at rest also repairs what is already stored without a migration — rows are cleaned
+  as they load, so the next save writes the clean value back. **11 of 26 rows in a real profile carried a
+  trailing slash**, and they heal on their own once this build has run.
+- **Session discovery no longer misses `~/.claude/projects` directories for paths with a trailing slash.**
+  `ConvertToClaudeDirName` maps every non-alphanumeric to `-`, so `/Users/me/proj/` encoded to `-Users-me-proj-`,
+  a directory that does not exist next to the real one. Those instances showed a stale transcript forever. One
+  `ClaudeProjectDirName` (EvalSymlinks + `filepath.Clean`) is now the only way such a name is built.
+
+### Changed
+- **The help screen documents group keys that already worked.** `d` (delete a group, with a confirm) was listed
+  nowhere at all, and `Shift+Up`/`Shift+Down` (or `K`/`J`) to reorder a group or session appeared only under
+  general movement. Both are now under GROUPS, alongside a new WHILE ATTACHED section.
+- **`go fmt` pass** — struct field alignment across nine pre-existing files. Kept as its own commit so the
+  release diff stays readable.
+
 
 ## [1.0.7] - 2026-08-25
 

@@ -6,7 +6,7 @@
 
 **Terminal command center for AI coding agents.**
 
-Run and switch between Claude Code, Gemini, Codex, and other terminal AI tools —
+Run and switch between Claude Code, Copilot, Gemini, and other terminal AI tools —
 each in its own tmux session — from one keyboard-driven view.
 
 [![Release](https://img.shields.io/github/v/release/millwright-software/agent-desk?style=flat-square&color=e0af68&labelColor=1a1b26)](https://github.com/millwright-software/agent-desk/releases)
@@ -17,203 +17,103 @@ each in its own tmux session — from one keyboard-driven view.
 </div>
 
 > **A Millwright Software fork of [`asheshgoplani/agent-deck`](https://github.com/asheshgoplani/agent-deck)** by Ashesh Goplani.
-> Maintained independently, distributed under the original MIT license (see [`LICENSE`](LICENSE)); upstream
-> authorship is preserved in the commit history.
-
-## About this fork
-
-A personal, stripped-down fork, tuned for how I work.
-
-**What's gone:** the conductor orchestration layer and the web/dashboard surface — just Claude Code and GitHub
-Copilot CLI in tmux.
-
-**What's sharper** — the controls I use every day:
-
-- **Name-forward path picker** — folder name first, `~` collapse, recent-project stars
-- **Model + mode on every row** — see each session's model and auto/manual mode at a glance
-- **Manual flags** (`u`) — mark a session unread or parked to come back to
-- **Per-session color schemes** (`c`) — tint the tmux window and preview per session
-- **Worktree-manager overlay** — clear orphaned worktrees without dropping to the CLI
-
-Upstream is bigger, more featured, and actively maintained — if you want the full toolkit, use it.
-
----
-
-## What it does
-
-Running Claude Code on a dozen projects, plus a couple of Gemini and Codex sessions? Managing that as a wall of
-terminal tabs gets messy fast — hard to see what's running, what's waiting on you, and where you left off.
-
-Agent Desk puts every agent session in one place:
-
-- **See status at a glance** — running, waiting, idle, or errored, for every session
-- **Switch in a keystroke** — jump to any session instantly; attach/detach without losing state
-- **Stay organized** — groups, fuzzy search, manual flags, and git worktrees
-
-It's tmux underneath, with AI-aware status detection and session management layered on top.
+> Maintained independently under the original MIT license (see [`LICENSE`](LICENSE)); upstream authorship is
+> preserved in the commit history. This fork drops the conductor layer and the web dashboard. Upstream is
+> bigger and actively maintained.
 
 ## Install
 
-**Works on:** macOS, Linux, Windows (WSL). Requires `tmux`.
-
-**Quick install** (prebuilt binary — macOS arm64/Intel, Linux amd64/arm64):
+Requires `tmux`. macOS, Linux, or Windows via [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/millwright-software/agent-desk/main/install.sh | bash
 ```
 
-**With Go** (requires Go 1.24+):
+<details>
+<summary>Other ways to install</summary>
 
 ```bash
-go install github.com/millwright-software/agent-desk/cmd/agent-desk@latest
+go install github.com/millwright-software/agent-desk/cmd/agent-desk@latest   # needs Go 1.24+
+
+git clone https://github.com/millwright-software/agent-desk.git              # from source
+cd agent-desk && make install
 ```
 
-**From source:**
+</details>
+
+The app checks for new releases and can update itself. Or re-run the installer.
+
+## Use
 
 ```bash
-git clone https://github.com/millwright-software/agent-desk.git
-cd agent-desk
-make install
+agent-desk                        # launch the TUI
+agent-desk add . -c claude        # add the current dir as a Claude session
 ```
-
-Then run `agent-desk`. To update, re-run the installer (or `go install …@latest` / `git pull && make install`).
-
-## Quick start
-
-```bash
-agent-desk                        # Launch the TUI
-agent-desk add . -c claude        # Add the current dir as a Claude session
-agent-desk mcp attach my-proj exa # Attach an MCP server to a session
-```
-
-### Key shortcuts
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Attach to session |
-| `n` | New session |
-| `u` | Cycle manual flag: unread → parked → normal |
-| `M` | MCP Manager |
-| `/` / `G` | Search / global search across all Claude conversations |
-| `Shift+J` / `Shift+K` | Reorder session down / up |
-| `r` | Restart session |
-| `d` | Delete session |
-| `?` | Full help |
+| `Shift+←` / `Shift+→` | Previous / next live session, while attached |
+| `Ctrl+Q` | Detach back to the list |
+| `n` · `d` | New session · delete |
+| `g` · `G` | New group · new top-level group |
+| `m` · `e` | Move session to a group · rename group |
+| `Shift+↑` / `Shift+↓` | Move a group or session up/down |
+| `Tab` · `1`–`9` | Expand/collapse group · jump to group |
+| `?` | Every shortcut |
 
-See the [TUI Reference](skills/agent-desk/references/tui-reference.md) for every shortcut and the
-[CLI Reference](skills/agent-desk/references/cli-reference.md) for every command.
-
-## Features
-
-### Status detection
-
-Agent Desk polls each session and infers what its agent is doing:
+Each session shows what its agent is doing:
 
 | Status | Symbol | Meaning |
 |--------|--------|---------|
-| **Running** | `●` yellow | Actively working |
-| **Waiting** | `●` green | Needs your input |
-| **Idle** | `○` gray | Ready for commands |
-| **Error** | `✕` red | Something went wrong |
+| Running | `●` yellow | Actively working |
+| Waiting | `●` green | Needs your input |
+| Idle | `○` gray | Ready for commands |
+| Error | `✕` red | Something went wrong |
 
-A manual unread bookmark (`u`) shows a **dimmer green** dot — "seen it, reply still owed" — distinct from the
-bright green of a waiting session you haven't looked at yet.
+Claude sessions read the session hook and transcript, so the status is exact and includes the current model.
+Other tools fall back to output patterns and tmux activity.
 
-For Claude, detection uses the session hook and transcript for fast, accurate state (including the current model).
-Other tools fall back to output-pattern and tmux-activity detection.
+## Worktrees
 
-### MCP manager
-
-Attach MCP servers without hand-editing config files. Press `M`, `Space` to toggle a server, `Tab` to cycle scope
-(local / global). Define your servers once in `~/.agent-desk/config.toml`; toggle them per session. Agent Desk
-handles the restart. See the [Configuration Reference](skills/agent-desk/references/config-reference.md).
-
-**MCP socket pool** — with `pool_all = true`, MCP processes are shared across sessions over Unix sockets, cutting
-MCP memory ~85–90% and auto-recovering from crashes in a few seconds via a reconnecting proxy.
-
-### Git worktrees
-
-Run multiple agents against the same repo without conflicts — each in an isolated worktree and branch.
+Each session can run in its own git worktree and branch.
 
 ```bash
-agent-desk add . -c claude --worktree feature/a --new-branch   # session in a new worktree
-agent-desk worktree finish "My Session"                        # merge branch, remove worktree, delete session
-agent-desk worktree cleanup                                    # remove orphaned worktrees
+agent-desk add . -c claude --worktree feature/a --new-branch
+agent-desk worktree finish "My Session"    # merge, remove worktree, delete session
+agent-desk worktree cleanup                # remove orphaned worktrees
 ```
 
-Set the default location in `~/.agent-desk/config.toml`:
+Worktrees go in a sibling directory by default; `[worktree] default_location` in `~/.agent-desk/config.toml`
+changes that.
 
-```toml
-[worktree]
-default_location = "subdirectory"  # "sibling" (default), "subdirectory", or a custom path
-```
+## Tools
 
-### Multi-tool support
-
-| Tool | Integration |
-|------|-------------|
-| **Claude Code** | Full — status, MCP, resume, model detection |
-| **Gemini CLI** | Full — status, MCP, resume |
-| **GitHub Copilot CLI** | Status detection, resume (`--continue`), organization |
-| **OpenCode / Codex / Cursor** (terminal) | Status detection + organization |
-| **Any other terminal CLI** | Wrap it via `[tools.*]` in `config.toml` |
-
-Any terminal-based AI tool can be added as a custom tool with its own launch command, icon, and status patterns:
-
-```toml
-[tools.my-ai]
-command = "my-ai-assistant"
-icon = "🧠"
-busy_patterns = ["thinking...", "processing..."]
-```
+| Tool | Support |
+|------|---------|
+| Claude Code | Status, resume, model detection |
+| Gemini CLI | Status, resume |
+| GitHub Copilot CLI | Status, resume (`--continue`) |
+| OpenCode / Codex / Cursor | Status detection |
+| Anything else in a terminal | Add it under `[tools.*]` in `config.toml` |
 
 ## Documentation
 
 | Guide | Contents |
 |-------|----------|
 | [CLI Reference](skills/agent-desk/references/cli-reference.md) | Commands, flags, scripting |
-| [Configuration](skills/agent-desk/references/config-reference.md) | `config.toml`, MCP, custom tools, socket pool |
+| [Configuration](skills/agent-desk/references/config-reference.md) | `config.toml`, custom tools, MCP |
 | [TUI Reference](skills/agent-desk/references/tui-reference.md) | Shortcuts, status indicators, navigation |
 | [Troubleshooting](skills/agent-desk/references/troubleshooting.md) | Common issues, recovery, uninstalling |
 
-**Ask an AI about Agent Desk** — if you use Claude Code, install the bundled skill:
-
-```bash
-/plugin marketplace add millwright-software/agent-desk
-/plugin install agent-desk@agent-desk
-```
-
-## FAQ
-
-<details>
-<summary><b>How is this different from just using tmux?</b></summary>
-
-Agent Desk adds AI-specific intelligence on top of tmux: status detection that knows when Claude is working vs.
-waiting, MCP management, global search across conversations, and organized groups. It's tmux plus AI awareness.
-
-</details>
-
-<details>
-<summary><b>Can I use it on Windows?</b></summary>
-
-Yes, via WSL. [Install WSL](https://learn.microsoft.com/en-us/windows/wsl/install) (WSL2 recommended), then
-install Agent Desk inside it.
-
-</details>
-
-<details>
-<summary><b>Will it interfere with my existing tmux setup?</b></summary>
-
-No. Agent Desk creates its own tmux sessions prefixed `agentdesk_*`; your existing sessions are untouched.
-
-</details>
+Agent Desk makes its own tmux sessions, prefixed `agentdesk_*`. Existing ones are untouched.
 
 ## Development
 
 ```bash
-make build    # Build
-make test     # Test
-make lint     # Lint
+make build
+make test
+make lint
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

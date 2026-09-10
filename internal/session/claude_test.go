@@ -573,3 +573,61 @@ func TestConvertToClaudeDirName(t *testing.T) {
 		})
 	}
 }
+
+// A project path stored with a trailing slash must resolve to the same
+// ~/.claude/projects directory as one without. ConvertToClaudeDirName maps "/"
+// to "-", so "…/proj/" used to encode to "…-proj-" — a directory that does not
+// exist — and findActiveSessionIDExcluding bailed at its os.Stat. The instance
+// then never learned the session ID that /clear had rotated to, and agent-desk
+// showed a stale transcript forever. 11 of 26 rows in one real profile had a
+// trailing slash, so this was the common case, not the edge case.
+func TestFindActiveSessionIDExcludingTolerantOfTrailingSlash(t *testing.T) {
+	configDir := t.TempDir()
+	projectPath := "/Users/test/slash-project"
+	projectDir := filepath.Join(configDir, "projects", ConvertToClaudeDirName(projectPath))
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"no trailing slash", projectPath},
+		{"trailing slash", projectPath + "/"},
+		{"redundant separators", "/Users/test//slash-project/"},
+		{"dot segment", "/Users/test/./slash-project"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := findActiveSessionIDExcluding(configDir, tc.path, nil); got != sessionID {
+				t.Errorf("got %q, want %q for project path %q", got, sessionID, tc.path)
+			}
+		})
+	}
+}
+
+func TestClaudeProjectDirName(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"plain path", "/Users/test/proj", "-Users-test-proj"},
+		{"trailing slash dropped", "/Users/test/proj/", "-Users-test-proj"},
+		{"double separator collapsed", "/Users/test//proj", "-Users-test-proj"},
+		{"dot segment removed", "/Users/test/./proj", "-Users-test-proj"},
+		{"non-alphanumerics still become hyphens", "/Users/test/my proj!", "-Users-test-my-proj-"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClaudeProjectDirName(tt.path); got != tt.want {
+				t.Errorf("ClaudeProjectDirName(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}

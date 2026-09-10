@@ -20,7 +20,64 @@ import (
 
 	"github.com/millwright-software/agent-desk/internal/logging"
 	"golang.org/x/sync/singleflight"
+	"golang.org/x/term"
 )
+
+const (
+	// tmuxDefaultCols/Rows are tmux's own birth size for a detached session.
+	// They are a floor, not a target: a host terminal narrower than this must
+	// not birth a pane MORE clipped than tmux's default already is, and
+	// window-size=latest shrinks the window to the real client on attach.
+	tmuxDefaultCols = 80
+	tmuxDefaultRows = 24
+
+	// headlessInitialCols/Rows are the birth size when no controlling
+	// terminal is reachable (redirected output, spawned from scripts).
+	// Deliberately generous so the first paint is never the clipped one.
+	headlessInitialCols = 200
+	headlessInitialRows = 50
+)
+
+// terminalSizeProbe reports the size of the terminal agent-desk itself runs
+// on. Swappable seam so tests can drive both the TTY and the no-TTY branch
+// deterministically, without needing a real terminal.
+var terminalSizeProbe = probeTerminalSize
+
+// probeTerminalSize tries stdout, then stderr, then stdin — the first that is
+// a terminal wins. stdout is the TUI's terminal; stderr survives `>file`
+// redirection; stdin covers the rest. /dev/tty is deliberately NOT opened: in
+// a daemonized parent that can block, and it would leak a descriptor on every
+// session spawn.
+func probeTerminalSize() (cols, rows int, ok bool) {
+	for _, f := range []*os.File{os.Stdout, os.Stderr, os.Stdin} {
+		if f == nil {
+			continue
+		}
+		w, h, err := term.GetSize(int(f.Fd()))
+		if err == nil && w > 0 && h > 0 {
+			return w, h, true
+		}
+	}
+	return 0, 0, false
+}
+
+// InitialWindowSize returns the -x/-y size a detached `new-session` should be
+// born at: the real terminal size when there is one (floored at tmux's own
+// 80x24 default), else the generous headless size. Ported from upstream
+// agent-deck #1694.
+func InitialWindowSize() (cols, rows int) {
+	cols, rows, ok := terminalSizeProbe()
+	if !ok {
+		return headlessInitialCols, headlessInitialRows
+	}
+	if cols < tmuxDefaultCols {
+		cols = tmuxDefaultCols
+	}
+	if rows < tmuxDefaultRows {
+		rows = tmuxDefaultRows
+	}
+	return cols, rows
+}
 
 var statusLog = logging.ForComponent(logging.CompStatus)
 var respawnLog = logging.ForComponent(logging.CompSession)
@@ -897,8 +954,14 @@ func (s *Session) Start(command string) error {
 		workDir = os.Getenv("HOME")
 	}
 
-	// Create new tmux session in detached mode
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", s.Name, "-c", workDir)
+	// Create new tmux session in detached mode.
+	// -x/-y birth the window at the terminal agent-desk runs on (ported from
+	// upstream #1694). Without them tmux uses its 80x24 default, so the tool's
+	// first paint is 80 columns wide — wrapped at the wrong width — and every
+	// later resize repaints another copy into scrollback.
+	cols, rows := InitialWindowSize()
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", s.Name, "-c", workDir,
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create tmux session: %w (output: %s)", err, string(output))
@@ -3317,7 +3380,12 @@ func ClearStatusLeftGlobal() error {
 // Should be called once during startup.
 func InitializeStatusBarOptions() error {
 	// Set adequate status-left-length globally (default is only 10 chars!)
-	// This ensures the notification bar content is not truncated
+	// This ensures the notification bar content is not truncated.
+	//
+	// focus-events is deliberately NOT touched here: leaving it at tmux's
+	// default (off) means the tools inside cannot tell whether their pane is
+	// being looked at. Claude Code prints a startup notice about it — that
+	// notice is cosmetic, and keeping focus state private is the intent.
 	return exec.Command("tmux", "set-option", "-g", "status-left-length", "120").Run()
 }
 
