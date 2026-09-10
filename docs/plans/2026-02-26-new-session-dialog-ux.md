@@ -86,7 +86,7 @@ func GetDirectoryCompletions(input string) ([]string, error)
 
 Make agent-desk aware of the handoff framework's `.handoff.yaml` files:
 
-1. **Node Discovery:** Scan known root paths (e.g., `~/Desktop/vault`, `~/Desktop/millwright-software`) for `.handoff.yaml` files
+1. **Node Discovery:** Scan configured root paths (the directories where the user keeps their repos) for `.handoff.yaml` files
 2. **Present as structured list:** Show nodes by name with hierarchy context instead of raw paths
 3. **Config source:** Could be a new section in agent-desk's TOML config specifying root scan paths, or auto-discover from recent session paths
 

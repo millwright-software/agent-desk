@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/millwright-software/agent-desk/internal/session"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/millwright-software/agent-desk/internal/session"
 )
 
 var (
@@ -352,7 +352,7 @@ func (gs *GlobalSearch) View() string {
 		widthPercent = 35
 	}
 	leftWidth := totalWidth * widthPercent / 100 // configurable for results
-	rightWidth := totalWidth - leftWidth - 3 // Rest for preview (minus border)
+	rightWidth := totalWidth - leftWidth - 3     // Rest for preview (minus border)
 
 	previewHeight := gs.height - 12 // Leave room for header, input, hints
 	if previewHeight < 10 {

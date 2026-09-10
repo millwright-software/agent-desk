@@ -10,7 +10,6 @@ before:
 builds:
   - id: agent-desk
     main: ./cmd/agent-desk
-    binary: agent-desk
     env:
       - CGO_ENABLED=0
     goos:
@@ -86,17 +85,15 @@ release:
 
     **Full Changelog**: https://github.com/millwright-software/agent-desk/compare/{{ .PreviousTag }}...{{ .Tag }}
 
-brews:
+# `brews:` was removed in goreleaser 2.x — `goreleaser check` fails on it, which
+# means the config cannot be validated before a release. Casks are the supported
+# path for a distributed binary.
+homebrew_casks:
   - name: agent-desk
     repository:
       owner: millwright-software
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/millwright-software/agent-desk"
     description: "Terminal session manager for AI coding agents"
-    license: "MIT"
-    dependencies:
-      - name: tmux
-    test: |
-      system "#{bin}/agent-desk", "version"

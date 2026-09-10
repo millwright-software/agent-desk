@@ -600,9 +600,9 @@ func TestRenderHelpBarCompactWithSession(t *testing.T) {
 	if !strings.Contains(result, "Restart") {
 		t.Error("Compact help bar should contain 'Restart'")
 	}
-	// Claude sessions surface the MCP hint in the compact bar.
-	if !strings.Contains(result, "MCP") {
-		t.Error("Compact help bar should contain 'MCP' for a claude session")
+	// The MCP Manager is retired in this fork; its hint must not appear.
+	if strings.Contains(result, "MCP") {
+		t.Error("Compact help bar must not advertise the retired MCP Manager")
 	}
 	// Should NOT contain full verbose text
 	if strings.Contains(result, "Global") {
@@ -932,7 +932,7 @@ func TestRenderPreviewPaneAfterCuts(t *testing.T) {
 		ID:              "prev-1",
 		Title:           "Preview Session",
 		Tool:            "claude",
-		ProjectPath:     "/Users/erichey/Desktop/millwright-software/agent-desk",
+		ProjectPath:     "/Users/me/src/agent-desk",
 		GroupPath:       "vault",
 		ClaudeSessionID: "sess-abc",
 		Status:          session.StatusIdle,

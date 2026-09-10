@@ -4,6 +4,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -19,12 +20,116 @@ import (
 	"golang.org/x/term"
 )
 
-// Attach attaches to the tmux session with full PTY support
-// Ctrl+Q will detach and return to the caller
-func (s *Session) Attach(ctx context.Context) error {
-	if !s.Exists() {
-		return fmt.Errorf("session %s does not exist", s.Name)
+// Scrollback-clear escape sequences (ported from upstream agent-deck #419/#618).
+const (
+	// clearScrollbackCSI is CSI 3 J — "Erase Saved Lines". Honored by Terminal.app,
+	// WezTerm, Alacritty, Ghostty, Kitty, xterm, and older iTerm2 builds.
+	clearScrollbackCSI = "\x1b[3J"
+	// itermClearScrollback is OSC 1337 ; ClearScrollback BEL — iTerm2-specific.
+	// Required by iTerm2 3.6.x when "Save lines to scrollback in alternate
+	// screen mode" is OFF. Other terminals parse the OSC payload and discard it
+	// safely — adding this escape is strictly additive.
+	itermClearScrollback = "\x1b]1337;ClearScrollback\a"
+)
+
+// emitScrollbackClear writes escape sequences to clear the host terminal's
+// scrollback buffer. Both the generic CSI 3 J escape AND the iTerm2-specific
+// OSC 1337 ClearScrollback escape are emitted. Both the attach entry and the
+// detach exit route through this helper so the two boundaries cannot drift.
+func emitScrollbackClear(w io.Writer) {
+	_, _ = io.WriteString(w, clearScrollbackCSI)
+	_, _ = io.WriteString(w, itermClearScrollback)
+}
+
+// StartAttachPTY starts cmd attached to a new PTY pre-sized to tty's current
+// dimensions (ported from upstream agent-deck #1167).
+//
+// tmux clients connect at their PTY's size. A bare pty.Start creates the
+// attach client's PTY at the 80x24 default, so the window snaps to 80 cols
+// until the async SIGWINCH grows it — and each of those resizes makes the
+// inner tool fully repaint, pushing wrong-width duplicate frames into
+// scrollback. Reading the controlling terminal's real size up front and
+// starting the PTY with it makes the client full-size from frame one.
+//
+// When tty is not a terminal (size probe fails), it falls back to a plain
+// start at the default size: a degraded attach is still better than no attach.
+func StartAttachPTY(cmd *exec.Cmd, tty *os.File) (*os.File, error) {
+	if tty != nil {
+		if ws, err := pty.GetsizeFull(tty); err == nil && ws.Cols > 0 && ws.Rows > 0 {
+			return pty.StartWithSize(cmd, ws)
+		}
 	}
+	return pty.Start(cmd)
+}
+
+// SwitchDirection is what the user asked for on the way out of an attach.
+// SwitchNone means an ordinary detach — Ctrl+Q, tmux's own Ctrl+B d, or the
+// session's command exiting.
+type SwitchDirection int
+
+const (
+	SwitchNone SwitchDirection = iota
+	SwitchNext
+	SwitchPrev
+)
+
+// ⚠️ SHIFT+ARROWS, NOT SHIFT+BRACKETS. In a terminal Shift+] IS "}" and
+// Shift+[ IS "{" — they are the ASCII bytes 0x7D/0x7B, not distinct keys.
+// Intercepting those mid-attach would eat every brace typed into the session,
+// which in a coding tool is not a trade worth making. Shift+Right/Left send
+// dedicated CSI sequences that nothing types by accident.
+//
+// ⚠️ They arrive as a multi-byte read, so they cannot be matched the way Ctrl+Q
+// is (n == 1 && buf[0] == 0x11). They are compared against the whole slice, and
+// a short read that splits the sequence just forwards it — the safe failure,
+// because the session then sees an ordinary Shift+Arrow.
+var (
+	seqShiftRight = []byte{0x1b, '[', '1', ';', '2', 'C'}
+	seqShiftLeft  = []byte{0x1b, '[', '1', ';', '2', 'D'}
+)
+
+// switchForBytes decides whether one raw stdin read is a switch request.
+//
+// The match is against the WHOLE read, never a prefix or a substring: pasted
+// text can contain anything, and a paste that happened to include these six
+// bytes must not yank the user into another session.
+func switchForBytes(b []byte) SwitchDirection {
+	switch {
+	case bytes.Equal(b, seqShiftRight):
+		return SwitchNext
+	case bytes.Equal(b, seqShiftLeft):
+		return SwitchPrev
+	}
+	return SwitchNone
+}
+
+// Attach attaches to the tmux session with full PTY support.
+// Ctrl+Q detaches and returns to the caller.
+func (s *Session) Attach(ctx context.Context) error {
+	_, err := s.AttachSwitchable(ctx)
+	return err
+}
+
+// AttachSwitchable is Attach, and additionally reports whether the user asked
+// to move to the next or previous session on the way out (Shift+Right /
+// Shift+Left). It only reports intent; the caller decides what "next" means.
+//
+// The plain Attach wrapper stays because tea.ExecCommand fixes Run() error, and
+// the CLI's `session attach` has no session ring to move around in.
+func (s *Session) AttachSwitchable(ctx context.Context) (SwitchDirection, error) {
+	switchTo := SwitchNone
+	if !s.Exists() {
+		return switchTo, fmt.Errorf("session %s does not exist", s.Name)
+	}
+
+	// Clear the outer terminal emulator's scrollback buffer to prevent stale
+	// frames from a previously-attached session (or a previous attach of this
+	// one) bleeding into what the user sees when they scroll up (#419/#618).
+	//
+	// Note: we intentionally do NOT call `tmux clear-history` here. tmux pane
+	// histories are per-pane; clearing them on attach would destroy the user's
+	// scrollback and break mouse-wheel / copy-mode navigation (#531).
+	emitScrollbackClear(os.Stdout)
 
 	// Create context with cancel for Ctrl+Q detach
 	ctx, cancel := context.WithCancel(ctx)
@@ -33,17 +138,18 @@ func (s *Session) Attach(ctx context.Context) error {
 	// Start tmux attach command with PTY
 	cmd := exec.CommandContext(ctx, "tmux", "attach-session", "-t", s.Name)
 
-	// Start command with PTY
-	ptmx, err := pty.Start(cmd)
+	// Start command with PTY, pre-sized to the controlling terminal so the
+	// tmux client connects at full size from frame one (#1167).
+	ptmx, err := StartAttachPTY(cmd, os.Stdin)
 	if err != nil {
-		return fmt.Errorf("failed to start pty: %w", err)
+		return switchTo, fmt.Errorf("failed to start pty: %w", err)
 	}
 	defer ptmx.Close()
 
 	// Save original terminal state and set raw mode
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
-		return fmt.Errorf("failed to set raw mode: %w", err)
+		return switchTo, fmt.Errorf("failed to set raw mode: %w", err)
 	}
 	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
 
@@ -57,7 +163,7 @@ func (s *Session) Attach(ctx context.Context) error {
 	// which the Go poller does not honor on darwin terminals.
 	stdinReader, err := cancelreader.NewReader(os.Stdin)
 	if err != nil {
-		return fmt.Errorf("failed to create cancelable stdin reader: %w", err)
+		return switchTo, fmt.Errorf("failed to create cancelable stdin reader: %w", err)
 	}
 
 	// Handle window resize signals
@@ -153,6 +259,17 @@ func (s *Session) Attach(ctx context.Context) error {
 				return
 			}
 
+			// Shift+Right / Shift+Left: detach and ask the caller to move to the
+			// next or previous session. ⚠️ Written BEFORE detachCh closes — the
+			// select below returns as soon as it does, so a write afterwards
+			// races the caller's read and the switch is silently dropped.
+			if dir := switchForBytes(buf[:n]); dir != SwitchNone {
+				switchTo = dir
+				close(detachCh)
+				cancel()
+				return
+			}
+
 			// Forward other input to tmux PTY
 			if _, err := ptmx.Write(buf[:n]); err != nil {
 				// Report PTY write error
@@ -200,7 +317,13 @@ func (s *Session) Attach(ctx context.Context) error {
 	stdinReader.Cancel()
 	<-stdinDone
 	_ = stdinReader.Close()
-	return result
+
+	// Clear host terminal scrollback before returning to the TUI. The on-attach
+	// clear at the top of Attach() covers the "next attach" direction; this
+	// covers the "on detach" direction so stale frames of the session never sit
+	// in the host scrollback behind the TUI (#419/#618).
+	emitScrollbackClear(os.Stdout)
+	return switchTo, result
 }
 
 // Resize changes the terminal size of the tmux session

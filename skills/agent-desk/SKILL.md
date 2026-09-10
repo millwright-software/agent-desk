@@ -1,6 +1,6 @@
 ---
 name: agent-desk
-description: Terminal session manager for AI coding agents. Use when user mentions "agent-desk", "session", "sub-agent", "MCP attach", "git worktree", or needs to (1) create/start/stop/restart/fork sessions, (2) attach/detach MCPs, (3) manage groups/profiles, (4) get session output, (5) configure agent-desk, (6) troubleshoot issues, (7) launch sub-agents, or (8) create/manage worktree sessions. Covers CLI commands, TUI shortcuts, config.toml options, and automation.
+description: Terminal session manager for AI coding agents. Use when user mentions "agent-desk", "session", "sub-agent", "MCP attach", "git worktree", or needs to (1) create/start/stop/restart sessions, (2) attach/detach MCPs, (3) manage groups/profiles, (4) get session output, (5) configure agent-desk, (6) troubleshoot issues, (7) launch sub-agents, or (8) create/manage worktree sessions. Covers CLI commands, TUI shortcuts, config.toml options, and automation.
 compatibility: claude, opencode
 ---
 
@@ -8,7 +8,7 @@ compatibility: claude, opencode
 
 Terminal session manager for AI coding agents. Built with Go + Bubble Tea.
 
-**Version:** 0.8.98 | **Repo:** [github.com/millwright-software/agent-desk](https://github.com/millwright-software/agent-desk) | **Discord:** [discord.gg/e4xSs6NBN8](https://discord.gg/e4xSs6NBN8)
+**Version:** 1.0.8 | **Repo:** [github.com/millwright-software/agent-desk](https://github.com/millwright-software/agent-desk) | **Issues:** [github.com/millwright-software/agent-desk/issues](https://github.com/millwright-software/agent-desk/issues)
 
 ## Script Path Resolution (IMPORTANT)
 
@@ -58,7 +58,6 @@ agent-desk session output "Project"
 | `agent-desk session send <name> "message"` | Send message |
 | `agent-desk session output <name>` | Get last response |
 | `agent-desk session current [-q\|--json]` | Auto-detect current session |
-| `agent-desk session fork <name>` | Fork Claude conversation |
 | `agent-desk mcp list` | List available MCPs |
 | `agent-desk mcp attach <name> <mcp>` | Attach MCP (then restart) |
 | `agent-desk status` | Quick status summary |
@@ -177,10 +176,11 @@ agent-desk remove "Codex Review" && agent-desk remove "Gemini Arch"
 ### Session Actions
 | Key | Action |
 |-----|--------|
-| `n` | New session |
-| `r/R` | Restart (reloads MCPs) |
-| `M` | MCP Manager |
-| `f/F` | Fork Claude session |
+| `n` / `N` | New session / quick create |
+| `r` | Rename session |
+| `R` (Shift+R) | Restart / reconnect (also reloads MCPs) |
+| `M` (Shift+M) | Sweep idle sessions into an "Inactive" group |
+| `u` | Cycle marker: unread → parked → normal |
 | `d` | Delete |
 | `m` | Move to group |
 
@@ -289,8 +289,8 @@ See [config-reference.md](references/config-reference.md) for all options.
 
 ### Get Help
 
-- **Discord:** [discord.gg/e4xSs6NBN8](https://discord.gg/e4xSs6NBN8) for quick questions and community support
-- **GitHub Issues:** For bug reports and feature requests
+- **GitHub Issues:** [report a bug or request a feature](https://github.com/millwright-software/agent-desk/issues)
+- **GitHub Discussions:** [questions and general discussion](https://github.com/millwright-software/agent-desk/discussions)
 
 ### Report a Bug
 

@@ -10,7 +10,6 @@ Common issues and solutions for agent-desk.
 | MCPs not loading | `agent-desk session restart <name>` |
 | CLI changes not in TUI | Press `Ctrl+R` to refresh |
 | Flag not working | Put flags BEFORE arguments |
-| Fork fails | Check session has valid Claude session ID |
 | Status stuck | Wait 2 seconds or press `u` to mark unread |
 
 ## Common Issues
@@ -35,7 +34,7 @@ agent-desk session start -m "Hello" my-project
 
 ### Session ID Not Detected
 
-Claude session ID needed for fork/resume. Check:
+Claude session ID is needed to resume a session (Shift+R). Check:
 
 ```bash
 agent-desk session show <name> --json | jq '.claude_session_id'
@@ -183,7 +182,7 @@ Use this template:
 - Check for responses on your issue
 - Test any suggested fixes
 - Update issue with results
-- Join [Discord](https://discord.gg/e4xSs6NBN8) for quick help and community support
+- Open a [GitHub issue](https://github.com/millwright-software/agent-desk/issues) or start a [discussion](https://github.com/millwright-software/agent-desk/discussions)
 
 ## Recovery
 

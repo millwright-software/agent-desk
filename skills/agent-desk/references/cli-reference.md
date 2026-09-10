@@ -98,18 +98,6 @@ agent-desk session restart <id|title>
 
 Reloads MCPs without losing conversation (Claude/Gemini).
 
-### session fork (Claude only)
-
-```bash
-agent-desk session fork <id|title> [-t "title"] [-g "group"]
-```
-
-Creates new session with same Claude conversation.
-
-**Requirements:**
-- Session must be Claude tool
-- Must have valid Claude session ID
-
 ### session attach
 
 ```bash

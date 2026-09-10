@@ -1898,3 +1898,38 @@ func TestGetLastActivityTimePrefersLog(t *testing.T) {
 		t.Errorf("with log mtime = %v, want %v", got, logMtime)
 	}
 }
+
+// ProjectPath is compared as an exact string in several places (the
+// .claude.json lookup in GetClaudeSessionID, CLI path matching, experiment
+// matching), so a trailing slash stored at rest made each of those silently
+// wrong unless the reader remembered to trim. Normalize once, on the way in.
+func TestNormalizeProjectPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"trailing slash removed", "/Users/test/proj/", "/Users/test/proj"},
+		{"already clean unchanged", "/Users/test/proj", "/Users/test/proj"},
+		{"double separator collapsed", "/Users/test//proj", "/Users/test/proj"},
+		{"dot segment removed", "/Users/test/./proj", "/Users/test/proj"},
+		{"root survives", "/", "/"},
+		{"empty stays empty, not \".\"", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeProjectPath(tt.path); got != tt.want {
+				t.Errorf("normalizeProjectPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewInstanceNormalizesProjectPath(t *testing.T) {
+	if got := NewInstance("t", "/Users/test/proj/").ProjectPath; got != "/Users/test/proj" {
+		t.Errorf("NewInstance stored %q, want %q", got, "/Users/test/proj")
+	}
+	if got := NewInstanceWithTool("t", "/Users/test/proj/", "claude").ProjectPath; got != "/Users/test/proj" {
+		t.Errorf("NewInstanceWithTool stored %q, want %q", got, "/Users/test/proj")
+	}
+}

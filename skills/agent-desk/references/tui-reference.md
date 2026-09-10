@@ -24,11 +24,9 @@ Complete reference for agent-desk Terminal UI features.
 | `R` | Restart session (reloads MCPs) |
 | `K` / `J` | Move item up/down in order |
 | `m` | Move session to different group |
-| `M` | Open MCP Manager (Claude/Gemini) |
+| `M` | Sweep idle sessions into an "Inactive" group |
 | `d` | Delete session or group |
-| `u` | Mark unread (idle -> waiting) |
-| `f` | Quick fork (Claude only) |
-| `F` | Fork with options (Claude only) |
+| `u` | Cycle marker: unread → parked red → parked blue → normal |
 
 ### Group Actions
 
@@ -82,34 +80,19 @@ Complete reference for agent-desk Terminal UI features.
 
 **Controls:** `Tab` move fields | `Enter` create | `Esc` cancel
 
-### MCP Manager (`M`)
+### Sweep idle sessions (`M`)
 
-**Layout:**
-- Two columns: Attached | Available
-- Two scopes: LOCAL | GLOBAL
+Moves every idle session into an "Inactive" group in one keypress, creating the
+group on first use. Sessions flagged unread (green — "waiting to be read") and
+sub-sessions are left where they are. A banner reports how many moved; `Esc`
+dismisses it, or it clears itself after 30 seconds.
 
-**Controls:**
-- `Tab` - Switch scope
-- `←/→` - Switch columns
-- `↑/↓` - Navigate
-- `Space` - Toggle MCP
-- `Enter` - Apply changes
-- `Esc` - Cancel
+This is a one-shot sweep, not a live group-by-status view — sessions you restart
+out of "Inactive" stay there until you move them or sweep again.
 
-**Indicators:**
-- `(l)` LOCAL scope
-- `(g)` GLOBAL scope
-- `(p)` PROJECT scope
-- `🔌` MCP is pooled
-- `⟳` Pending restart
-
-### Fork Dialog (`F`)
-
-**Fields:**
-- Session title (pre-filled)
-- Group (auto-selected)
-
-**Controls:** `Enter` fork | `Esc` cancel
+> **Note:** `M` opened an MCP Manager dialog in earlier versions. MCPs are now
+> managed from the CLI (`agent-desk mcp list|attach|detach`) — see the CLI
+> reference.
 
 ### Delete Confirmation (`d`)
 

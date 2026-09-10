@@ -118,7 +118,7 @@ func (h *HelpOverlay) View() string {
 				{"d", "Delete session"},
 				{"Ctrl+Z", "Undo delete"},
 				{"m", "Move to group"},
-				{"Shift+M", "MCP Manager (Claude)"},
+				{"Shift+M", "Sweep idle sessions to Inactive group"},
 				{"v", "Toggle preview mode (output/stats/both)"},
 				{"u", "Cycle unread → parked → normal"},
 				{"K / J", "Reorder up/down"},
@@ -140,7 +140,10 @@ func (h *HelpOverlay) View() string {
 				{"g", "New group (context-aware: subgroup on group header)"},
 				{"G", "New top-level group (always root)"},
 				{"e", "Rename group"},
+				{"d", "Delete group (confirms first)"},
 				{"Tab", "Toggle expand"},
+				{"Shift+Up/Down", "Move group or session up/down"},
+				{"K / J", "Move up/down (same as Shift+Up/Down)"},
 			},
 		},
 		{
@@ -158,9 +161,18 @@ func (h *HelpOverlay) View() string {
 				{"S", "Settings"},
 				{"Ctrl+R", "Reload from disk"},
 				{"i", "Import tmux sessions"},
-				{"Ctrl+Q", "Detach from session"},
 				{"q", "Quit"},
 				{"?", "This help"},
+			},
+		},
+		{
+			// Keys that work INSIDE an attached session. agent-desk proxies the
+			// PTY, so it sees these before tmux does.
+			title: "WHILE ATTACHED",
+			items: [][2]string{
+				{"Ctrl+Q", "Detach back to this list"},
+				{"Shift+Right", "Next live session"},
+				{"Shift+Left", "Previous live session"},
 			},
 		},
 	}

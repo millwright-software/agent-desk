@@ -389,8 +389,28 @@ func (inst *Instance) ClearParent() {
 	inst.ParentProjectPath = ""
 }
 
+// normalizeProjectPath cleans a project path before it is stored on an Instance.
+//
+// A trailing slash used to survive all the way into the database, and from there
+// into every exact-string comparison against ProjectPath — the .claude.json
+// lookup in GetClaudeSessionID, `agent-desk` CLI path matching, experiment
+// matching. isDuplicateSession already worked around it by trimming at compare
+// time, which is the tell: the value was wrong at rest, so each reader had to
+// remember to normalize, and the ones that forgot were silently wrong.
+//
+// Empty stays empty: filepath.Clean("") returns ".", which would turn "no path"
+// into the current directory.
+func normalizeProjectPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.Clean(p)
+}
+
 // NewInstance creates a new session instance
 func NewInstance(title, projectPath string) *Instance {
+	title = SanitizeDisplayName(title)
+	projectPath = normalizeProjectPath(projectPath)
 	id := generateID()
 	tmuxSess := tmux.NewSession(title, projectPath)
 	tmuxSess.InstanceID = id // Pass instance ID for activity hooks
@@ -417,6 +437,8 @@ func NewInstanceWithGroup(title, projectPath, groupPath string) *Instance {
 
 // NewInstanceWithTool creates a new session with tool-specific initialization
 func NewInstanceWithTool(title, projectPath, tool string) *Instance {
+	title = SanitizeDisplayName(title)
+	projectPath = normalizeProjectPath(projectPath)
 	id := generateID()
 	tmuxSess := tmux.NewSession(title, projectPath)
 	tmuxSess.InstanceID = id // Pass instance ID for activity hooks
@@ -2157,17 +2179,7 @@ func (i *Instance) GetJSONLPath() string {
 
 	configDir := GetClaudeConfigDir()
 
-	// Resolve symlinks in project path (macOS: /tmp -> /private/tmp)
-	resolvedPath := i.ProjectPath
-	if resolved, err := filepath.EvalSymlinks(i.ProjectPath); err == nil {
-		resolvedPath = resolved
-	}
-
-	// Convert project path to Claude's directory format
-	// Claude replaces ALL non-alphanumeric chars (spaces, !, etc.) with hyphens
-	// /Users/master/Code cloud/!Project -> -Users-master-Code-cloud--Project
-	projectDirName := ConvertToClaudeDirName(resolvedPath)
-	projectDir := filepath.Join(configDir, "projects", projectDirName)
+	projectDir := filepath.Join(configDir, "projects", ClaudeProjectDirName(i.ProjectPath))
 
 	// Build the JSONL file path
 	sessionFile := filepath.Join(projectDir, i.ClaudeSessionID+".jsonl")
@@ -2189,17 +2201,7 @@ func (i *Instance) getClaudeLastResponse() (*ResponseOutput, error) {
 
 	configDir := GetClaudeConfigDir()
 
-	// Resolve symlinks in project path (macOS: /tmp -> /private/tmp)
-	resolvedPath := i.ProjectPath
-	if resolved, err := filepath.EvalSymlinks(i.ProjectPath); err == nil {
-		resolvedPath = resolved
-	}
-
-	// Convert project path to Claude's directory format
-	// Claude replaces ALL non-alphanumeric chars (spaces, !, etc.) with hyphens
-	// /Users/master/Code cloud/!Project -> -Users-master-Code-cloud--Project
-	projectDirName := ConvertToClaudeDirName(resolvedPath)
-	projectDir := filepath.Join(configDir, "projects", projectDirName)
+	projectDir := filepath.Join(configDir, "projects", ClaudeProjectDirName(i.ProjectPath))
 
 	// Use stored session ID directly
 	sessionFile := filepath.Join(projectDir, i.ClaudeSessionID+".jsonl")
@@ -3293,14 +3295,8 @@ func sessionHasConversationData(sessionID string, projectPath string) bool {
 		configDir = filepath.Join(os.Getenv("HOME"), ".claude")
 	}
 
-	// Resolve symlinks in project path (macOS: /tmp -> /private/tmp)
-	resolvedPath := projectPath
-	if resolved, err := filepath.EvalSymlinks(projectPath); err == nil {
-		resolvedPath = resolved
-	}
-
 	// Encode project path using Claude's directory format
-	encodedPath := ConvertToClaudeDirName(resolvedPath)
+	encodedPath := ClaudeProjectDirName(projectPath)
 	if encodedPath == "" {
 		encodedPath = "-"
 	}

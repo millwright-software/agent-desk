@@ -23,6 +23,27 @@ func ConvertToClaudeDirName(path string) string {
 	return claudeDirNameRegex.ReplaceAllString(path, "-")
 }
 
+// ClaudeProjectDirName resolves a project path the way Claude Code does before
+// encoding it, and is the only correct way to build a ~/.claude/projects name.
+//
+// Two normalisations matter, and BOTH are load-bearing:
+//   - symlinks are resolved (macOS: /tmp -> /private/tmp)
+//   - the path is cleaned, so a stored trailing slash does not survive
+//
+// The trailing slash is not hypothetical. ConvertToClaudeDirName maps every
+// non-alphanumeric character to "-", so "/Users/me/proj/" encodes to
+// "-Users-me-proj-" — a directory that does not exist, next to the real
+// "-Users-me-proj". Instances created with a trailing slash in ProjectPath are
+// common (11 of 26 rows in one real profile), and every one of them silently
+// lost disk-based session discovery because this step was skipped in one place.
+func ClaudeProjectDirName(path string) string {
+	resolved := path
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		resolved = r
+	}
+	return ConvertToClaudeDirName(filepath.Clean(resolved))
+}
+
 // ClaudeProject represents a project entry in Claude's config
 type ClaudeProject struct {
 	LastSessionId string `json:"lastSessionId"`
@@ -318,10 +339,11 @@ func findActiveSessionID(configDir, projectPath string) string {
 // skipping any session IDs in the exclude set. This prevents picking up a .jsonl
 // owned by another agent-desk instance when multiple sessions share the same project.
 func findActiveSessionIDExcluding(configDir, projectPath string, excludeIDs map[string]bool) string {
-	// Convert project path to Claude's directory format
-	// Claude replaces ALL non-alphanumeric chars (spaces, !, etc.) with hyphens
-	// /Users/master/Code cloud/!Project -> -Users-master-Code-cloud--Project
-	projectDirName := ConvertToClaudeDirName(projectPath)
+	// Convert project path to Claude's directory format. Must go through
+	// ClaudeProjectDirName: a raw ConvertToClaudeDirName here turns a stored
+	// trailing slash into a trailing "-", the Stat below misses, and this
+	// instance can never learn the new session ID after a /clear.
+	projectDirName := ClaudeProjectDirName(projectPath)
 	projectDir := filepath.Join(configDir, "projects", projectDirName)
 
 	// Check if project directory exists

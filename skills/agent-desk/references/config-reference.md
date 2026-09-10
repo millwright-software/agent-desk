@@ -153,7 +153,7 @@ description = "Web search via Exa AI"
 | `command` | string | Yes | Executable (npx, docker, node, python). |
 | `args` | array | No | Command arguments. |
 | `env` | map | No | Environment variables. |
-| `description` | string | No | Help text in MCP Manager. |
+| `description` | string | No | Human-readable note about this MCP. |
 
 ### HTTP/SSE MCPs (Remote)
 
@@ -170,7 +170,7 @@ description = "Remote MCP server"
 | `url` | string | Yes | HTTP/SSE endpoint URL. |
 | `transport` | string | No | "http" (default) or "sse". |
 | `headers` | map | No | HTTP headers (e.g., Authorization). |
-| `description` | string | No | Help text in MCP Manager. |
+| `description` | string | No | Human-readable note about this MCP. |
 
 ### HTTP MCPs with Auto-Start Server
 

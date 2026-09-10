@@ -2,9 +2,9 @@
 
 TUI session manager for AI coding tools (Claude Code, Gemini, OpenCode, Codex).
 
-**Priorities:** See `td.md`
+**Priorities:** `td.md` at the repo root — local and untracked, not project history.
 
-**Requires:** Go 1.22+, tmux
+**Requires:** Go 1.24+ (per `go.mod`), tmux
 
 ---
 

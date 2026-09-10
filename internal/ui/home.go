@@ -19,7 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 
 	"github.com/millwright-software/agent-desk/internal/clipboard"
 	"github.com/millwright-software/agent-desk/internal/git"
@@ -149,7 +149,6 @@ type Home struct {
 	groupDialog          *GroupDialog          // For creating/renaming groups
 	confirmDialog        *ConfirmDialog        // For confirming destructive actions
 	helpOverlay          *HelpOverlay          // For showing keyboard shortcuts
-	mcpDialog            *MCPDialog            // For managing MCPs
 	setupWizard          *SetupWizard          // For first-run setup
 	settingsPanel        *SettingsPanel        // For editing settings
 	analyticsPanel       *AnalyticsPanel       // For displaying session analytics
@@ -284,7 +283,7 @@ type Home struct {
 	// Notification bar (tmux status-left for waiting sessions)
 	notificationManager  *session.NotificationManager
 	notificationsEnabled bool
-	bellEnabled          bool // ring terminal bell when a session enters "waiting"
+	bellEnabled          bool              // ring terminal bell when a session enters "waiting"
 	boundKeys            map[string]string // Track which key is bound (key -> "sessionID:tmuxName")
 	boundKeysMu          sync.Mutex        // Protects boundKeys for background worker access
 	lastBarText          string            // Cache to avoid updating all sessions every tick
@@ -525,7 +524,6 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		groupDialog:          NewGroupDialog(),
 		confirmDialog:        NewConfirmDialog(),
 		helpOverlay:          NewHelpOverlay(),
-		mcpDialog:            NewMCPDialog(),
 		setupWizard:          NewSetupWizard(),
 		settingsPanel:        NewSettingsPanel(),
 		analyticsPanel:       NewAnalyticsPanel(),
@@ -1557,9 +1555,35 @@ func (h *Home) getDefaultPathForGroup(groupPath string) string {
 		return ""
 	}
 	if group, exists := h.groupTree.Groups[groupPath]; exists {
-		return group.DefaultPath
+		return mainRepoForNewSession(group.DefaultPath)
 	}
 	return ""
+}
+
+// mainRepoForNewSession maps a group's remembered path back to the repository
+// it belongs to, so a NEW session does not default into a worktree.
+//
+// ⚠️ A GROUP'S DEFAULT PATH IS THE MOST RECENT SESSION'S PROJECT PATH, AND
+// THAT IS OFTEN A WORKTREE. Sessions legitimately run in worktrees, so storing
+// one is correct; offering it as the starting point for the next session is
+// not. A worktree is a transient workspace -- landed and removed at the end of
+// a session -- so the offered default is frequently a directory that no longer
+// exists, and when it does exist, the new session is isolated inside somebody
+// else's workspace.
+//
+// The stored value is left alone; only what the New Session dialog opens with
+// is resolved. If the path is not in a repository, or the lookup fails, the
+// original is returned unchanged -- a default that is merely unhelpful beats an
+// empty one.
+func mainRepoForNewSession(path string) string {
+	if path == "" {
+		return path
+	}
+	root, err := git.GetMainWorktreePath(path)
+	if err != nil || root == "" {
+		return path
+	}
+	return root
 }
 
 // statusWorker runs in a background goroutine with its own ticker
@@ -2653,6 +2677,23 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for next change
 		return h, tea.Batch(cmd, listenForReloads(h.storageWatcher))
 
+	case switchSessionMsg:
+		// Shift+Right / Shift+Left from inside an attach. The previous attach
+		// has fully torn down by the time this message is delivered.
+		h.isAttaching.Store(false)
+		if msg.target == nil {
+			return h, nil
+		}
+		// Move the cursor first, so the sidebar is already on the new session
+		// when the next detach returns to it.
+		for i, item := range h.flatItems {
+			if item.Type == session.ItemTypeSession && item.Session == msg.target {
+				h.cursor = i
+				break
+			}
+		}
+		return h, h.attachSession(msg.target)
+
 	case statusUpdateMsg:
 		// Clear attach flag - we've returned from the attached session
 		h.isAttaching.Store(false) // Atomic store for thread safety
@@ -3194,9 +3235,6 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.confirmDialog.IsVisible() {
 			return h.handleConfirmDialogKey(msg)
 		}
-		if h.mcpDialog.IsVisible() {
-			return h.handleMCPDialogKey(msg)
-		}
 		if h.geminiModelDialog.IsVisible() {
 			d, cmd := h.geminiModelDialog.Update(msg)
 			h.geminiModelDialog = d
@@ -3635,6 +3673,13 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					h.isAttaching.Store(true) // Prevent View() output during transition (atomic)
 					return h, h.attachSession(item.Session)
 				}
+				// tmux session is gone (e.g. server killed) — tell the user
+				// how to get it back instead of silently ignoring Enter
+				if item.Session.CanRestart() {
+					h.setError(fmt.Errorf("session not running — press R (Shift+r) to restart/reconnect"))
+				} else {
+					h.setError(fmt.Errorf("session not running and cannot be restarted"))
+				}
 			} else if item.Type == session.ItemTypeGroup {
 				// Toggle group on enter
 				groupPath := item.Path
@@ -3750,18 +3795,42 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "M", "shift+m":
-		// MCP Manager - for Claude and Gemini sessions
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil &&
-				(item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				h.mcpDialog.SetSize(h.width, h.height)
-				if err := h.mcpDialog.Show(item.Session.ProjectPath, item.Session.ID, item.Session.Tool); err != nil {
-					h.setError(err)
-				}
+		// Sweep idle sessions into an "Inactive" group. (This binding used to
+		// open the MCP Manager; that feature is retired in this fork.)
+		// Skipped: unread-flagged sessions ("waiting to be read" is not
+		// inactive) and sub-sessions (they stay nested under their parent).
+		const inactiveGroupPath = "Inactive"
+		moved := 0
+		for _, inst := range h.groupTree.GetAllInstances() {
+			if inst.Status != session.StatusIdle {
+				continue
 			}
+			if inst.Flag == session.FlagUnread {
+				continue
+			}
+			if inst.IsSubSession() {
+				continue
+			}
+			if inst.GroupPath == inactiveGroupPath {
+				continue
+			}
+			h.groupTree.MoveSessionToGroup(inst, inactiveGroupPath)
+			moved++
 		}
-		return h, nil
+		if moved == 0 {
+			h.setError(fmt.Errorf("no idle sessions to sweep to Inactive"))
+			return h, nil
+		}
+		h.instancesMu.Lock()
+		h.instances = h.groupTree.GetAllInstances()
+		h.instancesMu.Unlock()
+		h.rebuildFlatItems()
+		h.saveInstances()
+		h.maintenanceMsg = fmt.Sprintf("Moved %d idle session(s) to Inactive — Esc to dismiss", moved)
+		h.maintenanceMsgTime = time.Now()
+		return h, tea.Tick(30*time.Second, func(_ time.Time) tea.Msg {
+			return clearMaintenanceMsg{}
+		})
 
 	case "W", "shift+w":
 		// Worktree finish - merge + cleanup for worktree sessions
@@ -3888,18 +3957,31 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		pathMap := make(map[string]*pathInfo)
 		for _, inst := range h.instances {
-			if inst.ProjectPath == "" {
+			suggestPath := inst.ProjectPath
+			// Worktree sessions live in throwaway checkout dirs — suggesting
+			// those pollutes the picker with .worktrees/<branch> entries.
+			// Suggest the original repo root instead (or skip if unknown).
+			if inst.IsWorktree() {
+				suggestPath = inst.WorktreeRepoRoot
+			}
+			if suggestPath == "" {
 				continue
 			}
-			existing, ok := pathMap[inst.ProjectPath]
+			// Normalize (trailing slashes etc.) so "repo/" and "repo" dedup
+			suggestPath = filepath.Clean(suggestPath)
+			existing, ok := pathMap[suggestPath]
 			if !ok {
-				// First time seeing this path
+				// First time seeing this path — only suggest dirs that still
+				// exist, so deleted projects/worktrees age out of the picker.
+				if fi, err := os.Stat(suggestPath); err != nil || !fi.IsDir() {
+					continue
+				}
 				accessTime := inst.LastAccessedAt
 				if accessTime.IsZero() {
 					accessTime = inst.CreatedAt // Fall back to creation time
 				}
-				pathMap[inst.ProjectPath] = &pathInfo{
-					path:           inst.ProjectPath,
+				pathMap[suggestPath] = &pathInfo{
+					path:           suggestPath,
 					lastAccessedAt: accessTime,
 				}
 			} else {
@@ -4364,64 +4446,6 @@ func (h *Home) performFinalShutdown(shutdownPool bool) tea.Cmd {
 	}
 }
 
-// handleMCPDialogKey handles keys when MCP dialog is visible
-func (h *Home) handleMCPDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		// DEBUG: Log entry point
-		mcpUILog.Debug("dialog_enter_pressed")
-
-		// Apply changes and close dialog
-		hasChanged := h.mcpDialog.HasChanged()
-		mcpUILog.Debug("dialog_has_changed", slog.Bool("changed", hasChanged))
-
-		if hasChanged {
-			// Apply changes (saves state + writes .mcp.json)
-			if err := h.mcpDialog.Apply(); err != nil {
-				mcpUILog.Debug("dialog_apply_failed", slog.String("error", err.Error()))
-				h.setError(err)
-				h.mcpDialog.Hide() // Hide dialog even on error
-				return h, nil
-			}
-			mcpUILog.Debug("dialog_apply_succeeded")
-
-			// Find the session by ID (stored when dialog opened - same as Shift+S uses)
-			sessionID := h.mcpDialog.GetSessionID()
-			mcpUILog.Debug("dialog_looking_for_session", slog.String("session_id", sessionID))
-
-			// O(1) lookup - no lock needed as Update() runs on main goroutine
-			targetInst := h.getInstanceByID(sessionID)
-			if targetInst != nil {
-				mcpUILog.Debug("dialog_session_found", slog.String("session_id", targetInst.ID), slog.String("title", targetInst.Title))
-			}
-
-			if targetInst != nil {
-				mcpUILog.Debug("dialog_restarting_session", slog.String("session_id", targetInst.ID))
-				// Track as MCP loading for animation in preview pane
-				h.mcpLoadingSessions[targetInst.ID] = time.Now()
-				// Set flag to skip MCP regeneration (Apply just wrote the config)
-				targetInst.SkipMCPRegenerate = true
-				// Restart the session to apply MCP changes
-				h.mcpDialog.Hide()
-				return h, h.restartSession(targetInst)
-			} else {
-				mcpUILog.Debug("dialog_session_not_found", slog.String("session_id", sessionID))
-			}
-		}
-		mcpUILog.Debug("dialog_hiding_without_restart")
-		h.mcpDialog.Hide()
-		return h, nil
-
-	case "esc":
-		h.mcpDialog.Hide()
-		return h, nil
-
-	default:
-		h.mcpDialog.Update(msg)
-		return h, nil
-	}
-}
-
 // handleGroupDialogKey handles keys when group dialog is visible
 func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -4478,7 +4502,7 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case GroupDialogRenameSession:
-			newName := h.groupDialog.GetValue()
+			newName := session.SanitizeDisplayName(h.groupDialog.GetValue())
 			if newName != "" {
 				sessionID := h.groupDialog.GetSessionID()
 				// Find and rename the session (O(1) lookup)
@@ -5056,7 +5080,8 @@ skipSave:
 	// Use tea.Exec with a custom command that runs our Attach method
 	// On return, immediately update all session statuses (don't reload from storage
 	// which would lose the tmux session state)
-	return tea.Exec(attachCmd{session: tmuxSess}, func(err error) tea.Msg {
+	switchTo := new(tmux.SwitchDirection)
+	return tea.Exec(attachCmd{session: tmuxSess, switchTo: switchTo}, func(err error) tea.Msg {
 		// CRITICAL: Set isAttaching to false BEFORE returning the message
 		// This prevents a race condition where View() could be called with
 		// isAttaching=true before Update() processes statusUpdateMsg,
@@ -5074,13 +5099,87 @@ skipSave:
 		// Acknowledgment happens on ATTACH (only if session was waiting/yellow).
 		// This lets running sessions stay green through attach/detach cycles.
 
+		// Shift+Right / Shift+Left inside the attach: move to the next or
+		// previous LIVE session instead of returning to the sidebar.
+		if *switchTo != tmux.SwitchNone {
+			if next := h.neighbourLiveSession(inst, *switchTo == tmux.SwitchNext); next != nil {
+				return switchSessionMsg{target: next}
+			}
+			// Only one live session (or none but this): nothing to switch to.
+			// Falling through lands back in the sidebar, which is the honest
+			// outcome — silently re-attaching would look like the key did nothing.
+		}
+
 		return statusUpdateMsg{}
 	})
 }
 
+// switchSessionMsg asks Update to attach to another session. ⚠️ It is a MESSAGE
+// rather than a direct attachSession call inside the tea.Exec callback: that
+// callback runs while Bubble Tea is still restoring the terminal, and starting
+// a second attach there races the restore and leaves the TUI drawing over a
+// live PTY. Going through Update lets the first attach finish tearing down.
+type switchSessionMsg struct {
+	target *session.Instance
+}
+
+// neighbourLiveSession returns the session before or after `from` in sidebar
+// order, considering only sessions whose tmux session actually exists.
+//
+// ⚠️ It walks h.flatItems, not h.instances, so the ring follows the order shown
+// on screen — including group ordering the user arranged themselves. Group
+// HEADERS are skipped, so the ring crosses group boundaries rather than
+// stopping at them. Wraps at both ends; returns nil when `from` is the only
+// live session, so the caller can fall back to the sidebar.
+func (h *Home) neighbourLiveSession(from *session.Instance, forward bool) *session.Instance {
+	return neighbourInRing(h.flatItems, from, forward, func(i *session.Instance) bool {
+		return i.Exists()
+	})
+}
+
+// neighbourInRing is the ring walk itself, with liveness injected.
+//
+// ⚠️ Split out from neighbourLiveSession so it can be TESTED. Instance.Exists()
+// needs a real tmux session behind it, so a test built from bare &Instance{}
+// values would see every session as dead and the ring as empty — the logic
+// would pass by vacuum. The predicate lets a test say what is live.
+func neighbourInRing(items []session.Item, from *session.Instance, forward bool, isLive func(*session.Instance) bool) *session.Instance {
+	var live []*session.Instance
+	idx := -1
+	for _, item := range items {
+		if item.Type != session.ItemTypeSession || item.Session == nil {
+			continue
+		}
+		if !isLive(item.Session) {
+			continue
+		}
+		if item.Session == from {
+			idx = len(live)
+		}
+		live = append(live, item.Session)
+	}
+	if len(live) < 2 {
+		return nil
+	}
+	if idx == -1 {
+		// The session we came from is no longer live (its command exited while
+		// attached). Landing on the first live one still beats doing nothing.
+		return live[0]
+	}
+	if forward {
+		return live[(idx+1)%len(live)]
+	}
+	return live[(idx-1+len(live))%len(live)]
+}
+
 // attachCmd implements tea.ExecCommand for custom PTY attach
+//
+// ⚠️ switchTo is a POINTER because tea.ExecCommand fixes Run() error and
+// tea.Exec takes the command by value — a plain field would be written on a
+// copy and the switch would vanish between Run() and the callback.
 type attachCmd struct {
-	session *tmux.Session
+	session  *tmux.Session
+	switchTo *tmux.SwitchDirection
 }
 
 func (a attachCmd) Run() error {
@@ -5088,7 +5187,11 @@ func (a attachCmd) Run() error {
 	// Removing clear screen here prevents double-clearing which corrupts terminal state
 
 	ctx := context.Background()
-	return a.session.Attach(ctx)
+	dir, err := a.session.AttachSwitchable(ctx)
+	if a.switchTo != nil {
+		*a.switchTo = dir
+	}
+	return err
 }
 
 func (a attachCmd) SetStdin(r io.Reader)  {}
@@ -5348,9 +5451,6 @@ func (h *Home) View() string {
 	}
 	if h.confirmDialog.IsVisible() {
 		return h.confirmDialog.View()
-	}
-	if h.mcpDialog.IsVisible() {
-		return h.mcpDialog.View()
 	}
 	if h.geminiModelDialog.IsVisible() {
 		return h.geminiModelDialog.View()
@@ -5814,6 +5914,56 @@ func ensureExactHeight(content string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
+// displayWidth measures a line the way the layout will.
+//
+// ⚠️ MEASURE WITH THE SAME RULER THE JOIN USES. lipgloss.JoinHorizontal sizes
+// panels with lipgloss.Width; anything measured with go-runewidth instead can
+// disagree -- they differ on emoji carrying a variation selector, where
+// runewidth says a warning sign is 1 cell and lipgloss says 2. A preview line
+// that runewidth judged to fit is then 1 cell too wide for the join, which pads
+// every line to the larger figure, pushes the joined row past the terminal
+// width, wraps it, and makes the frame one row taller than the screen. The
+// visible result is the help bar drawn two to four times at the bottom, which
+// looks nothing like a measurement bug.
+//
+// The preview pane is the path that matters: it renders captured agent output,
+// so its content is arbitrary -- including the very warning signs this comment
+// is full of.
+func displayWidth(s string) int { return lipgloss.Width(s) }
+
+// truncateToWidth cuts a line to at most w cells, measured as above.
+func truncateToWidth(s string, w int, tail string) string {
+	if w <= 0 {
+		return ""
+	}
+	if displayWidth(s) <= w {
+		return s
+	}
+	budget := w - displayWidth(tail)
+	if budget < 0 {
+		budget = 0
+	}
+	// ⚠️ STEP BY GRAPHEME CLUSTER, NOT BY RUNE. Per-rune widths do not sum
+	// to the width of the string: "⚠️" is U+26A0 plus U+FE0F, which measure 1
+	// and 0 separately but 2 together, so a rune-wise loop lets each one
+	// through under budget and overshoots by a cell apiece. The first version
+	// of this function did exactly that and ran 5 cells over on a line of five
+	// warning signs.
+	var b strings.Builder
+	used := 0
+	g := uniseg.NewGraphemes(s)
+	for g.Next() {
+		cluster := g.Str()
+		cw := displayWidth(cluster)
+		if used+cw > budget {
+			break
+		}
+		b.WriteString(cluster)
+		used += cw
+	}
+	return b.String() + tail
+}
+
 // ensureExactWidth ensures each line in content has exactly the specified visual width.
 // This is essential for proper horizontal panel alignment in lipgloss.JoinHorizontal.
 //
@@ -6137,10 +6287,7 @@ func (h *Home) renderHelpBarMinimal() string {
 		if item.Type == session.ItemTypeGroup {
 			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("g")
 		} else {
-			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("R")
-			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				contextKeys += " " + keyStyle.Render("M")
-			}
+			contextKeys = keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("R")
 		}
 	}
 
@@ -6189,12 +6336,10 @@ func (h *Home) renderHelpBarCompact() string {
 			}
 		} else {
 			contextHints = []string{
-				h.helpKeyShort("⏎", "Attach"),
 				h.helpKeyShort("n/N", "New"),
 				h.helpKeyShort("R", "Restart"),
 			}
 			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				contextHints = append(contextHints, h.helpKeyShort("M", "MCP"))
 				contextHints = append(contextHints, h.helpKeyShort("v", h.previewModeShort()))
 			}
 		}
@@ -6263,7 +6408,8 @@ func (h *Home) renderHelpBarFull() string {
 	if len(h.flatItems) == 0 {
 		contextTitle = "Empty"
 		primaryHints = []string{
-			h.helpKey("n/N", "New/Quick"),
+			h.helpKey("n", "New"),
+			h.helpKey("N", "Quick"),
 			h.helpKey("i", "Import"),
 			h.helpKey("g", "Group"),
 		}
@@ -6273,7 +6419,8 @@ func (h *Home) renderHelpBarFull() string {
 			contextTitle = "Group"
 			primaryHints = []string{
 				h.helpKey("Tab", "Toggle"),
-				h.helpKey("n/N", "New/Quick"),
+				h.helpKey("n", "New"),
+				h.helpKey("N", "Quick"),
 				h.helpKey("g", "Group"),
 			}
 			secondaryHints = []string{
@@ -6282,15 +6429,16 @@ func (h *Home) renderHelpBarFull() string {
 			}
 		} else {
 			contextTitle = "Session"
+			// Enter-to-attach is deliberately not hinted: it's the app's most
+			// obvious action and the space is better spent on the rest.
 			primaryHints = []string{
-				h.helpKey("Enter", "Attach"),
-				h.helpKey("n/N", "New/Quick"),
+				h.helpKey("n", "New"),
+				h.helpKey("N", "Quick"),
 				h.helpKey("g", "Group"),
 				h.helpKey("R", "Restart"),
 			}
-			// Show MCP Manager and preview mode toggle for Claude and Gemini sessions
+			// Show preview mode toggle for Claude and Gemini sessions
 			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				primaryHints = append(primaryHints, h.helpKey("M", "MCP"))
 				primaryHints = append(primaryHints, h.helpKey("v", h.previewModeShort()))
 			}
 			secondaryHints = []string{
@@ -6298,6 +6446,7 @@ func (h *Home) renderHelpBarFull() string {
 				h.helpKey("m", "Move"),
 				h.helpKey("d", "Delete"),
 				h.helpKey("u", "Unread/Park"),
+				h.helpKey("M", "Sweep idle"),
 			}
 		}
 	}
@@ -6590,17 +6739,20 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 	// the underlying status; parked states also dim the title so they recede.
 	switch inst.Flag {
 	case session.FlagUnread:
-		// "Come back to this" bookmark: bright green dot, title left normal
+		// "Come back to this" bookmark: green dot, bold light-green title
 		statusIcon = "●"
 		statusStyle = SessionStatusUnread
+		titleStyle = SessionTitleUnread
 	case session.FlagParkedRed:
+		// Hard park: red dot, dim red title at regular weight
 		statusIcon = "●"
 		statusStyle = SessionStatusParked
-		titleStyle = SessionTitleParked
+		titleStyle = SessionTitleParkedRed
 	case session.FlagParkedBlue:
+		// Soft hold ("idle waiting"): blue dot, italic dim blue title
 		statusIcon = "●"
 		statusStyle = SessionStatusParkedBlue
-		titleStyle = SessionTitleParked
+		titleStyle = SessionTitleParkedBlue
 	}
 
 	// Selection indicator. We deliberately do NOT restyle the status dot here:
@@ -7479,9 +7631,9 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			consecutiveEmpty = 0 // Reset counter on non-empty line
 
 			// Truncate based on display width (handles CJK, emoji correctly)
-			displayWidth := runewidth.StringWidth(cleanLine)
+			displayWidth := displayWidth(cleanLine)
 			if displayWidth > maxWidth {
-				cleanLine = runewidth.Truncate(cleanLine, maxWidth-3, "...")
+				cleanLine = truncateToWidth(cleanLine, maxWidth, "...")
 			}
 
 			b.WriteString(previewStyle.Render(cleanLine))
@@ -7503,11 +7655,11 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	for _, line := range lines {
 		// Strip ANSI codes for accurate measurement
 		cleanLine := tmux.StripANSI(line)
-		displayWidth := runewidth.StringWidth(cleanLine)
+		displayWidth := displayWidth(cleanLine)
 		if displayWidth > maxWidth {
 			// Truncate the clean version, then re-apply basic styling
 			// Note: This loses original styling but prevents layout corruption
-			truncated := runewidth.Truncate(cleanLine, maxWidth-3, "...")
+			truncated := truncateToWidth(cleanLine, maxWidth, "...")
 			truncatedLines = append(truncatedLines, truncated)
 		} else {
 			truncatedLines = append(truncatedLines, line)
@@ -7532,7 +7684,7 @@ func stripControlChars(s string) string {
 
 // truncatePath shortens a path to fit within maxLen display width
 func truncatePath(path string, maxLen int) string {
-	pathWidth := runewidth.StringWidth(path)
+	pathWidth := displayWidth(path)
 	if pathWidth <= maxLen {
 		return path
 	}
@@ -7546,7 +7698,7 @@ func truncatePath(path string, maxLen int) string {
 	endLen := maxLen*2/3 - 3
 	if startLen+endLen+3 > len(runes) {
 		// Path is short in runes but wide in display - use simple truncation
-		return runewidth.Truncate(path, maxLen-3, "...")
+		return truncateToWidth(path, maxLen, "...")
 	}
 	return string(runes[:startLen]) + "..." + string(runes[len(runes)-endLen:])
 }
@@ -7762,9 +7914,9 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 	var truncatedLines []string
 	for _, line := range lines {
 		cleanLine := tmux.StripANSI(line)
-		displayWidth := runewidth.StringWidth(cleanLine)
+		displayWidth := displayWidth(cleanLine)
 		if displayWidth > maxWidth {
-			truncated := runewidth.Truncate(cleanLine, maxWidth-3, "...")
+			truncated := truncateToWidth(cleanLine, maxWidth, "...")
 			truncatedLines = append(truncatedLines, truncated)
 		} else {
 			truncatedLines = append(truncatedLines, line)
