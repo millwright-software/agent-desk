@@ -100,6 +100,8 @@ func TestIsTerminalResponse(t *testing.T) {
 		{"OSC colour reply", "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\", true},
 		{"DCS XTVERSION reply", "\x1bP>|tmux 3.6a\x1b\\", true},
 		{"kitty keyboard flags reply", "\x1b[?0u", true},
+		{"focus in", "\x1b[I", true},
+		{"focus out", "\x1b[O", true},
 
 		{"a letter", "a", false},
 		{"enter", "\r", false},

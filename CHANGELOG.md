@@ -11,6 +11,13 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-09-11
+
+### Changed
+- **The switch card stays up for two seconds** instead of one. One second read as a flash.
+- Terminal focus-in / focus-out events no longer count as a keystroke to the card, so a window focus change
+  during the two seconds does not dismiss it.
+
 ## [1.0.10] - 2026-09-11
 
 ### Changed
