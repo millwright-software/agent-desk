@@ -39,8 +39,9 @@ const (
 	BannerEnvMillis   = "AGENT_DESK_BANNER_MS"
 	BannerEnvTarget   = "AGENT_DESK_BANNER_TARGET" // tmux session to re-send a swallowed key to
 
-	// bannerDuration is how long the card stays up if nothing is typed.
-	bannerDuration = time.Second
+	// bannerDuration is how long the card stays up if nothing is typed. One
+	// second read as a flash; two is long enough to actually read the name.
+	bannerDuration = 2 * time.Second
 
 	// Outer popup sizes. The block-letter card is border, blank, five rows of
 	// letters, blank, subtitle, blank, border. When the title is too wide for
@@ -182,6 +183,9 @@ func IsTerminalResponse(b []byte) bool {
 		}
 		if b[2] == '?' || b[2] == '>' || b[2] == '=' {
 			return true // private-mode / DA2 / DA3 style reports
+		}
+		if len(b) == 3 && (b[2] == 'I' || b[2] == 'O') {
+			return true // focus in / focus out: the window changed, nobody typed
 		}
 		switch b[len(b)-1] {
 		case 'c', 'R', 'n': // DA1, cursor position report, device status
