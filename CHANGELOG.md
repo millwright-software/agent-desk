@@ -11,6 +11,20 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-09-11
+
+### Changed
+- **The switch card is bigger and draws the session title in block letters** (a 5-row block font, uppercase),
+  with the group underneath. When the title is too wide for the letters at the current terminal size the card
+  falls back to the one-line bold version from 1.0.9, so a long title never gets clipped.
+
+### Fixed
+- **The switch card no longer flashes and vanishes.** tmux queries the terminal on attach (device attributes,
+  colours), and the replies land in the input stream tens of milliseconds later — after the 50ms window in
+  which attach-time control sequences are discarded. They were being treated as the first keystroke, which
+  dismissed the card almost as soon as it was drawn. Only plainly typed input dismisses it now; ESC-led input is
+  left to the card process, which tells a reply from a key and re-sends the key to the session if it was one.
+
 ## [1.0.9] - 2026-09-11
 
 ### Added

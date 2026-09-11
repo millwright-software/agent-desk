@@ -290,8 +290,13 @@ func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (S
 			}
 
 			// A real keystroke: take the landing card down first so the key
-			// lands in the session, not in the card.
-			if popup != nil {
+			// lands in the session, not in the card. ⚠️ Only for input that is
+			// plainly typed. Terminal replies to tmux's attach-time queries
+			// (device attributes, colours) arrive here too, after the 50ms
+			// cutoff above; they used to dismiss the card almost as soon as it
+			// was drawn. ESC-led input is left to the card process, which can
+			// tell a reply from a key and re-sends the key if it was one.
+			if popup != nil && buf[0] != 0x1b {
 				popup.dismiss()
 			}
 
