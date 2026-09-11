@@ -106,7 +106,7 @@ func switchForBytes(b []byte) SwitchDirection {
 // Attach attaches to the tmux session with full PTY support.
 // Ctrl+Q detaches and returns to the caller.
 func (s *Session) Attach(ctx context.Context) error {
-	_, err := s.AttachSwitchable(ctx)
+	_, err := s.AttachSwitchable(ctx, nil)
 	return err
 }
 
@@ -114,9 +114,14 @@ func (s *Session) Attach(ctx context.Context) error {
 // to move to the next or previous session on the way out (Shift+Right /
 // Shift+Left). It only reports intent; the caller decides what "next" means.
 //
+// banner, when non-nil, is shown over the session for a moment on landing
+// (see AttachBanner). The TUI passes one when the attach is the result of a
+// switch, where you did not pick the session from a list and may not know
+// which one you are looking at.
+//
 // The plain Attach wrapper stays because tea.ExecCommand fixes Run() error, and
 // the CLI's `session attach` has no session ring to move around in.
-func (s *Session) AttachSwitchable(ctx context.Context) (SwitchDirection, error) {
+func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (SwitchDirection, error) {
 	switchTo := SwitchNone
 	if !s.Exists() {
 		return switchTo, fmt.Errorf("session %s does not exist", s.Name)
@@ -201,6 +206,20 @@ func (s *Session) AttachSwitchable(ctx context.Context) (SwitchDirection, error)
 	// Initial resize
 	sigwinch <- syscall.SIGWINCH
 
+	// Landing card. Opened from a goroutine once the tmux client registers;
+	// the first keystroke below dismisses it so nothing typed is swallowed.
+	var popup *bannerPopup
+	if banner != nil {
+		if exe, err := os.Executable(); err == nil {
+			cols := 0
+			if ws, err := pty.GetsizeFull(os.Stdin); err == nil {
+				cols = int(ws.Cols)
+			}
+			popup = &bannerPopup{sessionName: s.Name, clientPID: cmd.Process.Pid, exe: exe, banner: *banner, cols: cols}
+			go popup.show(ctx)
+		}
+	}
+
 	// Channel to signal detach via Ctrl+Q
 	detachCh := make(chan struct{})
 
@@ -268,6 +287,12 @@ func (s *Session) AttachSwitchable(ctx context.Context) (SwitchDirection, error)
 				close(detachCh)
 				cancel()
 				return
+			}
+
+			// A real keystroke: take the landing card down first so the key
+			// lands in the session, not in the card.
+			if popup != nil {
+				popup.dismiss()
 			}
 
 			// Forward other input to tmux PTY

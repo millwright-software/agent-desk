@@ -11,6 +11,19 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-09-11
+
+### Added
+- **A name card pops up for a second when you switch sessions with `Shift+Right` / `Shift+Left`**, so you know
+  where you landed: the session title in bold, and its group (or project folder) underneath. It goes away on its
+  own after a second, or the instant you press a key — the key still reaches the session. It only appears on a
+  switch; opening a session from the list you already know what you picked.
+  ⚠️ It is a tmux popup (`display-popup`), not something drawn into the proxied byte stream: tmux composites it
+  over the pane and repaints what was underneath when it closes, which a hand-drawn overlay over a session that
+  is still scrolling could not do. The popup runs the `agent-desk` binary itself (hidden `attach-banner` verb)
+  with the text passed as environment, so a title with quotes or a `;` never meets a shell. Needs tmux 3.3+ for
+  the rounded border; on older tmux the card is skipped and the switch works as before.
+
 ## [1.0.8] - 2026-09-09
 
 ### Added
