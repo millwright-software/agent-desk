@@ -42,12 +42,15 @@ const (
 	// bannerDuration is how long the card stays up if nothing is typed.
 	bannerDuration = time.Second
 
-	// bannerHeight is the popup's outer height: border, blank, title,
-	// subtitle, border. bannerMinWidth keeps a one-letter title from
-	// rendering as a postage stamp.
-	bannerHeight   = 5
-	bannerMinWidth = 24
-	bannerPadding  = 6 // 2 border cells + 2 cells of air each side
+	// Outer popup sizes. The block-letter card is border, blank, five rows of
+	// letters, blank, subtitle, blank, border. When the title is too wide for
+	// the block font at this terminal size the card falls back to one bold
+	// line: border, blank, title, subtitle, border. bannerMinWidth keeps a
+	// one-letter title from rendering as a postage stamp.
+	bannerArtHeight   = 2 + 1 + bannerFontRows + 1 + 1 + 1
+	bannerPlainHeight = 5
+	bannerMinWidth    = 24
+	bannerPadding     = 8 // 2 border cells + 3 cells of air each side
 
 	// bannerClientWait bounds how long we poll for the tmux client to appear.
 	// The popup needs a client to draw on; the attach we just started takes a
@@ -58,37 +61,52 @@ const (
 
 var bannerLog = respawnLog
 
-// bannerWidth is the popup's outer width for this card on a client cols wide.
-func bannerWidth(b AttachBanner, cols int) int {
-	w := runewidth.StringWidth(b.Title)
-	if sw := runewidth.StringWidth(b.Subtitle); sw > w {
-		w = sw
+// bannerSize is the popup's outer width and height for this card on a client
+// cols wide. The block font is used when it fits; otherwise the plain card.
+//
+// ⚠️ RenderBanner, running inside the popup, makes the same art-or-plain
+// choice from the interior size it is given. The two agree by construction:
+// the art card is only chosen here when the letters fit its interior, and the
+// plain card's interior is too short for art, so the renderer cannot pick art
+// in a plain-sized popup or vice versa.
+func bannerSize(b AttachBanner, cols int) (width, height int) {
+	maxWidth := cols - 4
+	if cols <= 0 {
+		maxWidth = 1 << 20 // unknown terminal size: do not clamp
 	}
-	w += bannerPadding
-	if w < bannerMinWidth {
-		w = bannerMinWidth
+	if w := blockTextWidth(b.Title) + bannerPadding; blockTextFits(b.Title, maxWidth-bannerPadding) {
+		width, height = w, bannerArtHeight
+	} else {
+		width, height = runewidth.StringWidth(b.Title)+bannerPadding, bannerPlainHeight
 	}
-	if max := cols - 4; cols > 0 && w > max {
-		w = max
+	if sw := runewidth.StringWidth(b.Subtitle) + bannerPadding; sw > width {
+		width = sw
 	}
-	if w < 10 {
-		w = 10
+	if width < bannerMinWidth {
+		width = bannerMinWidth
 	}
-	return w
+	if width > maxWidth {
+		width = maxWidth
+	}
+	if width < 10 {
+		width = 10
+	}
+	return width, height
 }
 
 // bannerPopupArgs builds the display-popup invocation. Two trailing arguments
 // (exe and the verb) make tmux exec the binary directly instead of through
 // `sh -c`, so nothing here needs quoting.
 func bannerPopupArgs(client, sessionName, exe string, b AttachBanner, cols int) []string {
+	width, height := bannerSize(b, cols)
 	return []string{
 		"display-popup",
 		"-E",            // close when the card's process exits
 		"-b", "rounded", // border-lines
 		"-c", client,
 		"-t", sessionName, // target-pane: anchors the popup to the session, not to whatever tmux guesses is "current"
-		"-w", strconv.Itoa(bannerWidth(b, cols)),
-		"-h", strconv.Itoa(bannerHeight),
+		"-w", strconv.Itoa(width),
+		"-h", strconv.Itoa(height),
 		"-e", BannerEnvTitle + "=" + b.Title,
 		"-e", BannerEnvSubtitle + "=" + b.Subtitle,
 		"-e", BannerEnvMillis + "=" + strconv.Itoa(int(bannerDuration/time.Millisecond)),
@@ -97,8 +115,10 @@ func bannerPopupArgs(client, sessionName, exe string, b AttachBanner, cols int) 
 	}
 }
 
-// RenderBanner lays the card out for a popup interior of cols x rows cells:
-// a blank line, the title in bold, the subtitle dimmed, each centred and
+// RenderBanner lays the card out for a popup interior of cols x rows cells.
+// With room for it, the title is drawn in the block font: a blank line, five
+// rows of letters, a blank line, the subtitle dimmed. Otherwise it is a blank
+// line, the title in bold, the subtitle dimmed. Every line is centred and
 // truncated to fit. Lines are joined with CRLF so it renders the same whether
 // or not the popup's pty translates newlines.
 func RenderBanner(title, subtitle string, cols, rows int) string {
@@ -113,21 +133,62 @@ func RenderBanner(title, subtitle string, cols, rows int) string {
 		}
 		return strings.Repeat(" ", pad) + s
 	}
-	lines := []string{
-		"",
-		"\x1b[1m" + centre(title) + "\x1b[0m",
+
+	var lines []string
+	if rows >= bannerArtHeight-2 && blockTextFits(title, cols) {
+		lines = append(lines, "")
+		for _, row := range renderBlockText(title) {
+			lines = append(lines, "\x1b[1m"+centre(row)+"\x1b[0m")
+		}
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, "", "\x1b[1m"+centre(title)+"\x1b[0m")
 	}
 	if subtitle != "" {
 		lines = append(lines, "\x1b[2m"+centre(subtitle)+"\x1b[0m")
 	}
 	if rows > 0 && len(lines) > rows {
-		// Too short for the blank line: drop it, then the subtitle.
+		// Too short for the leading blank line: drop it, then whatever else
+		// does not fit from the bottom.
 		lines = lines[1:]
 		if len(lines) > rows {
 			lines = lines[:rows]
 		}
 	}
 	return strings.Join(lines, "\r\n")
+}
+
+// IsTerminalResponse reports whether raw input looks like a terminal ANSWERING
+// a query rather than a person typing: device attributes (CSI ? … c,
+// CSI > … c), cursor/status reports (CSI … R / n), OSC and DCS replies
+// (colour queries, XTVERSION). tmux asks the terminal several of these on
+// attach and the replies land in the input stream tens of milliseconds
+// later; treating them as keystrokes is what made the first card vanish
+// almost as soon as it was drawn.
+//
+// Keys people press also start with ESC (arrows are CSI A–D, function keys
+// CSI … ~), which is why this checks the shape of the sequence and not just
+// the first byte.
+func IsTerminalResponse(b []byte) bool {
+	if len(b) < 2 || b[0] != 0x1b {
+		return false
+	}
+	switch b[1] {
+	case ']', 'P', '_', '^', 'X': // OSC, DCS, APC, PM, SOS: replies, never keys
+		return true
+	case '[':
+		if len(b) < 3 {
+			return false
+		}
+		if b[2] == '?' || b[2] == '>' || b[2] == '=' {
+			return true // private-mode / DA2 / DA3 style reports
+		}
+		switch b[len(b)-1] {
+		case 'c', 'R', 'n': // DA1, cursor position report, device status
+			return true
+		}
+	}
+	return false
 }
 
 // bannerPopup is one card's lifetime: opened on the attach's tmux client once
