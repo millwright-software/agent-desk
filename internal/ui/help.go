@@ -171,7 +171,7 @@ func (h *HelpOverlay) View() string {
 			title: "WHILE ATTACHED",
 			items: [][2]string{
 				{"Ctrl+Q", "Detach back to this list"},
-				{"Shift+Right", "Next live session"},
+				{"Shift+Right", "Next live session (its name pops up for a second)"},
 				{"Shift+Left", "Previous live session"},
 			},
 		},

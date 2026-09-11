@@ -2692,7 +2692,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		return h, h.attachSession(msg.target)
+		return h, h.attachSessionWithBanner(msg.target, landingBanner(msg.target))
 
 	case statusUpdateMsg:
 		// Clear attach flag - we've returned from the attached session
@@ -5004,6 +5004,23 @@ func (h *Home) restartSession(inst *session.Instance) tea.Cmd {
 
 // attachSession attaches to a session using custom PTY with Shift+Tab detection
 func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
+	return h.attachSessionWithBanner(inst, nil)
+}
+
+// landingBanner is the card shown over a session you arrived at by switching
+// rather than by picking it from the list: the title, and the group it lives
+// in (or the project folder when it has no group).
+func landingBanner(inst *session.Instance) *tmux.AttachBanner {
+	sub := inst.GroupPath
+	if sub == "" && inst.ProjectPath != "" {
+		sub = filepath.Base(inst.ProjectPath)
+	}
+	return &tmux.AttachBanner{Title: inst.Title, Subtitle: sub}
+}
+
+// attachSessionWithBanner is attachSession with an optional landing card
+// (nil for none).
+func (h *Home) attachSessionWithBanner(inst *session.Instance, banner *tmux.AttachBanner) tea.Cmd {
 	tmuxSess := inst.GetTmuxSession()
 	if tmuxSess == nil {
 		return nil
@@ -5081,7 +5098,7 @@ skipSave:
 	// On return, immediately update all session statuses (don't reload from storage
 	// which would lose the tmux session state)
 	switchTo := new(tmux.SwitchDirection)
-	return tea.Exec(attachCmd{session: tmuxSess, switchTo: switchTo}, func(err error) tea.Msg {
+	return tea.Exec(attachCmd{session: tmuxSess, switchTo: switchTo, banner: banner}, func(err error) tea.Msg {
 		// CRITICAL: Set isAttaching to false BEFORE returning the message
 		// This prevents a race condition where View() could be called with
 		// isAttaching=true before Update() processes statusUpdateMsg,
@@ -5180,6 +5197,7 @@ func neighbourInRing(items []session.Item, from *session.Instance, forward bool,
 type attachCmd struct {
 	session  *tmux.Session
 	switchTo *tmux.SwitchDirection
+	banner   *tmux.AttachBanner // landing card, nil for none
 }
 
 func (a attachCmd) Run() error {
@@ -5187,7 +5205,7 @@ func (a attachCmd) Run() error {
 	// Removing clear screen here prevents double-clearing which corrupts terminal state
 
 	ctx := context.Background()
-	dir, err := a.session.AttachSwitchable(ctx)
+	dir, err := a.session.AttachSwitchable(ctx, a.banner)
 	if a.switchTo != nil {
 		*a.switchTo = dir
 	}

@@ -29,7 +29,7 @@ import (
 	"github.com/millwright-software/agent-desk/internal/update"
 )
 
-const Version = "1.0.8"
+const Version = "1.0.9"
 
 // Table column widths for list command output
 const (
@@ -238,6 +238,9 @@ func main() {
 			return
 		case "hook-handler":
 			handleHookHandler()
+			return
+		case attachBannerSubcommand:
+			handleAttachBanner()
 			return
 		case "hooks":
 			handleHooks(args[1:])
