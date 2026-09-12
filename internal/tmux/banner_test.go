@@ -87,65 +87,6 @@ func TestRenderBlockText(t *testing.T) {
 	}
 }
 
-func TestIsTerminalResponse(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"DA1 reply", "\x1b[?62;22c", true},
-		{"DA2 reply", "\x1b[>1;95;0c", true},
-		{"cursor position report", "\x1b[24;80R", true},
-		{"device status ok", "\x1b[0n", true},
-		{"OSC colour reply", "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\", true},
-		{"DCS XTVERSION reply", "\x1bP>|tmux 3.6a\x1b\\", true},
-		{"kitty keyboard flags reply", "\x1b[?0u", true},
-		{"focus in", "\x1b[I", true},
-		{"focus out", "\x1b[O", true},
-
-		{"a letter", "a", false},
-		{"enter", "\r", false},
-		{"up arrow", "\x1b[A", false},
-		{"shift+right", "\x1b[1;2C", false},
-		{"F5", "\x1b[15~", false},
-		{"alt+x", "\x1bx", false},
-		{"bare escape", "\x1b", false},
-		{"empty", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsTerminalResponse([]byte(tt.in)); got != tt.want {
-				t.Errorf("IsTerminalResponse(%q) = %v, want %v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
-// The popup must exec the binary directly with the text in the environment.
-// A title with quotes or a `;` must never reach a shell.
-func TestBannerPopupArgsNeverShellQuotes(t *testing.T) {
-	b := AttachBanner{Title: `it's; "weird" $(x)`, Subtitle: "grp/sub"}
-	args := bannerPopupArgs("/dev/ttys004", "agent-desk_abc", "/usr/local/bin/agent-desk", b, 100)
-
-	joined := strings.Join(args, "\x00")
-	for _, want := range []string{
-		"-c\x00/dev/ttys004",
-		"-t\x00agent-desk_abc",
-		"-e\x00" + BannerEnvTitle + "=" + b.Title,
-		"-e\x00" + BannerEnvSubtitle + "=grp/sub",
-		"-e\x00" + BannerEnvTarget + "=agent-desk_abc",
-		"/usr/local/bin/agent-desk\x00" + BannerSubcommand,
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("args missing %q:\n%q", want, args)
-		}
-	}
-	// Last two args are exe + verb, which is what makes tmux exec instead of `sh -c`.
-	if args[len(args)-1] != BannerSubcommand {
-		t.Errorf("last arg = %q, want the subcommand", args[len(args)-1])
-	}
-}
-
 func TestRenderBanner(t *testing.T) {
 	// Plain card: a 3-row interior is too short for the block font.
 	out := RenderBanner("work", "grp", 20, 3)

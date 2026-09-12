@@ -5,6 +5,7 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"strconv"
@@ -159,42 +160,6 @@ func RenderBanner(title, subtitle string, cols, rows int) string {
 	return strings.Join(lines, "\r\n")
 }
 
-// IsTerminalResponse reports whether raw input looks like a terminal ANSWERING
-// a query rather than a person typing: device attributes (CSI ? … c,
-// CSI > … c), cursor/status reports (CSI … R / n), OSC and DCS replies
-// (colour queries, XTVERSION). tmux asks the terminal several of these on
-// attach and the replies land in the input stream tens of milliseconds
-// later; treating them as keystrokes is what made the first card vanish
-// almost as soon as it was drawn.
-//
-// Keys people press also start with ESC (arrows are CSI A–D, function keys
-// CSI … ~), which is why this checks the shape of the sequence and not just
-// the first byte.
-func IsTerminalResponse(b []byte) bool {
-	if len(b) < 2 || b[0] != 0x1b {
-		return false
-	}
-	switch b[1] {
-	case ']', 'P', '_', '^', 'X': // OSC, DCS, APC, PM, SOS: replies, never keys
-		return true
-	case '[':
-		if len(b) < 3 {
-			return false
-		}
-		if b[2] == '?' || b[2] == '>' || b[2] == '=' {
-			return true // private-mode / DA2 / DA3 style reports
-		}
-		if len(b) == 3 && (b[2] == 'I' || b[2] == 'O') {
-			return true // focus in / focus out: the window changed, nobody typed
-		}
-		switch b[len(b)-1] {
-		case 'c', 'R', 'n': // DA1, cursor position report, device status
-			return true
-		}
-	}
-	return false
-}
-
 // bannerPopup is one card's lifetime: opened on the attach's tmux client once
 // that client exists, dismissed early by the first keystroke.
 type bannerPopup struct {
@@ -203,6 +168,7 @@ type bannerPopup struct {
 	exe         string
 	banner      AttachBanner
 	cols        int
+	started     time.Time // when the attach began, for the timing in the log
 
 	mu     sync.Mutex
 	client string // set just before the popup is opened
@@ -230,11 +196,17 @@ func (p *bannerPopup) show(ctx context.Context) {
 	p.mu.Unlock()
 
 	args := bannerPopupArgs(client, p.sessionName, p.exe, p.banner, p.cols)
-	if out, err := exec.Command("tmux", args...).CombinedOutput(); err != nil {
-		// Old tmux (pre-3.3 lacks -b), the client went away, or -C closed it
-		// from under us. None of it is worth interrupting the attach over.
-		bannerLog.Debug("attach_banner_closed", slog.String("error", err.Error()), slog.String("output", strings.TrimSpace(string(out))))
-	}
+	opened := time.Now()
+	bannerLog.Debug("attach_banner_open", slog.String("client", client), slog.Duration("after_attach", time.Since(p.started)))
+	out, err := exec.Command("tmux", args...).CombinedOutput()
+	// Exit 129 is tmux's code for "closed by display-popup -C", i.e. our own
+	// dismiss(); 0 is the card timing out (or exiting on a key it got
+	// directly). Anything else is old tmux (pre-3.3 lacks -b) or a client
+	// that went away; none of it is worth interrupting the attach over.
+	bannerLog.Debug("attach_banner_closed",
+		slog.Duration("shown_for", time.Since(opened)),
+		slog.Any("error", err),
+		slog.String("output", strings.TrimSpace(string(out))))
 }
 
 // dismiss closes the popup so a keystroke reaches the session instead of the
@@ -247,7 +219,7 @@ func (p *bannerPopup) show(ctx context.Context) {
 // opens anyway. The card process covers that case itself: it exits on the
 // first byte it reads and re-sends that byte to the session (see the
 // attach-banner subcommand), so at worst one key takes the long way round.
-func (p *bannerPopup) dismiss() {
+func (p *bannerPopup) dismiss(input []byte) {
 	p.mu.Lock()
 	if p.done {
 		p.mu.Unlock()
@@ -256,6 +228,10 @@ func (p *bannerPopup) dismiss() {
 	p.done = true
 	client := p.client
 	p.mu.Unlock()
+	bannerLog.Debug("attach_banner_dismissed",
+		slog.String("input", fmt.Sprintf("%q", input)),
+		slog.Bool("was_open", client != ""),
+		slog.Duration("after_attach", time.Since(p.started)))
 	if client == "" {
 		return // never opened; show() will see done and skip
 	}

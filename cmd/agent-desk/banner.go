@@ -45,7 +45,8 @@ func handleAttachBanner() {
 	if oldState, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
 		defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
 		go func() {
-			buf := make([]byte, 64)
+			var class tmux.InputClassifier
+			buf := make([]byte, 256)
 			for {
 				n, err := os.Stdin.Read(buf)
 				if err != nil || n == 0 {
@@ -53,7 +54,7 @@ func handleAttachBanner() {
 				}
 				// tmux answers its own terminal queries, but anything it does
 				// not recognise reaches us here. A reply is not a keystroke.
-				if tmux.IsTerminalResponse(buf[:n]) {
+				if !class.Feed(buf[:n]) {
 					continue
 				}
 				key <- append([]byte(nil), buf[:n]...)
