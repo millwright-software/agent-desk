@@ -11,6 +11,12 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-09-11
+
+### Changed
+- **The switch card stays up for one second again.** Two seconds was a workaround for the early dismissal
+  fixed in 1.0.12; with that gone, one second is enough to read the name and two felt like a wait.
+
 ## [1.0.12] - 2026-09-11
 
 ### Fixed

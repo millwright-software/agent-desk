@@ -41,8 +41,9 @@ const (
 	BannerEnvTarget   = "AGENT_DESK_BANNER_TARGET" // tmux session to re-send a swallowed key to
 
 	// bannerDuration is how long the card stays up if nothing is typed. One
-	// second read as a flash; two is long enough to actually read the name.
-	bannerDuration = 2 * time.Second
+	// second is enough now that nothing dismisses it early; two felt like a
+	// wait.
+	bannerDuration = time.Second
 
 	// Outer popup sizes. The block-letter card is border, blank, five rows of
 	// letters, blank, subtitle, blank, border. When the title is too wide for

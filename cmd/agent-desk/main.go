@@ -29,7 +29,7 @@ import (
 	"github.com/millwright-software/agent-desk/internal/update"
 )
 
-const Version = "1.0.12"
+const Version = "1.0.13"
 
 // Table column widths for list command output
 const (
