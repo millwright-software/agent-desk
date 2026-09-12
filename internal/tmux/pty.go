@@ -215,7 +215,7 @@ func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (S
 			if ws, err := pty.GetsizeFull(os.Stdin); err == nil {
 				cols = int(ws.Cols)
 			}
-			popup = &bannerPopup{sessionName: s.Name, clientPID: cmd.Process.Pid, exe: exe, banner: *banner, cols: cols}
+			popup = &bannerPopup{sessionName: s.Name, clientPID: cmd.Process.Pid, exe: exe, banner: *banner, cols: cols, started: time.Now()}
 			go popup.show(ctx)
 		}
 	}
@@ -251,7 +251,8 @@ func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (S
 	stdinDone := make(chan struct{})
 	go func() {
 		defer close(stdinDone)
-		buf := make([]byte, 32)
+		var inputClass InputClassifier
+		buf := make([]byte, 256)
 		for {
 			n, err := stdinReader.Read(buf)
 			if err != nil {
@@ -290,14 +291,16 @@ func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (S
 			}
 
 			// A real keystroke: take the landing card down first so the key
-			// lands in the session, not in the card. ⚠️ Only for input that is
-			// plainly typed. Terminal replies to tmux's attach-time queries
-			// (device attributes, colours) arrive here too, after the 50ms
-			// cutoff above; they used to dismiss the card almost as soon as it
-			// was drawn. ESC-led input is left to the card process, which can
-			// tell a reply from a key and re-sends the key if it was one.
-			if popup != nil && buf[0] != 0x1b {
-				popup.dismiss()
+			// lands in the session, not in the card. ⚠️ Only for input a
+			// person TYPED, as judged by a parser that keeps state across
+			// reads. Terminal replies to tmux's attach-time queries (device
+			// attributes, colours, XTVERSION) arrive here too, after the 50ms
+			// cutoff above, and a burst of them spans more than one read;
+			// judging each chunk by its first byte took the tail of a reply
+			// for a keystroke and dismissed the card as soon as it was drawn.
+			if popup != nil && inputClass.Feed(buf[:n]) {
+				popup.dismiss(buf[:n])
+				popup = nil // dismissed for good; stop parsing
 			}
 
 			// Forward other input to tmux PTY

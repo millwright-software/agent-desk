@@ -11,6 +11,21 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-09-11
+
+### Fixed
+- **The switch card was still being dismissed almost at once, by terminal replies split across reads.** 1.0.10
+  stopped treating a chunk that *starts* with ESC as a keystroke, but the proxy reads stdin 32 bytes at a time
+  and the burst of replies to tmux's attach-time queries (device attributes, XTVERSION, colours) is longer than
+  that, so the second read began mid-sequence with an ordinary byte and looked like typing. The log confirmed
+  it: every close was exit 129, tmux's code for "closed by `display-popup -C`", which only our own dismiss sends.
+  Typed-or-not is now decided by a small parser (`InputClassifier`) that keeps state across reads: it tracks
+  CSI / OSC / DCS sequences to their terminator, so replies, focus events and mouse reports never count, while
+  letters, control keys, arrows, function keys and Alt-combinations do — even when a key's own sequence is split.
+  The card process uses the same parser for what tmux forwards to it. The proxy read buffer is 256 bytes now.
+  Each dismissal is logged to `~/.agent-desk/debug.log` with the exact input that caused it
+  (`attach_banner_dismissed`), alongside `attach_banner_open` / `attach_banner_closed` with timings.
+
 ## [1.0.11] - 2026-09-11
 
 ### Changed

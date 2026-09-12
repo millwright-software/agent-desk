@@ -8,7 +8,7 @@ compatibility: claude, opencode
 
 Terminal session manager for AI coding agents. Built with Go + Bubble Tea.
 
-**Version:** 1.0.11 | **Repo:** [github.com/millwright-software/agent-desk](https://github.com/millwright-software/agent-desk) | **Issues:** [github.com/millwright-software/agent-desk/issues](https://github.com/millwright-software/agent-desk/issues)
+**Version:** 1.0.12 | **Repo:** [github.com/millwright-software/agent-desk](https://github.com/millwright-software/agent-desk) | **Issues:** [github.com/millwright-software/agent-desk/issues](https://github.com/millwright-software/agent-desk/issues)
 
 ## Script Path Resolution (IMPORTANT)
 
