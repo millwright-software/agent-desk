@@ -11,6 +11,14 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-09-18
+
+### Changed
+- **`Shift+Right` / `Shift+Left` skip sessions parked red with `u`.** Red parking means "shelved, skip this";
+  landing on one while flipping through live work was exactly what the marker was set to avoid. Blue parking
+  and the unread bookmark are not skips. Opening a parked session from the list still works, and clears the
+  marker as before.
+
 ## [1.0.13] - 2026-09-11
 
 ### Changed

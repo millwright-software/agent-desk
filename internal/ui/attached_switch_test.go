@@ -134,3 +134,36 @@ func idOf(i *session.Instance) string {
 	}
 	return i.ID
 }
+
+// A session parked red with the u key is "shelved, skip this": the ring
+// passes over it even though its tmux session is alive. Blue parking and the
+// unread bookmark are not skips.
+func TestRingSkipsParkedRedSessions(t *testing.T) {
+	items, s := fixture()
+	isLive := live() // everything alive, including old-spike this time
+	s["dead"].Flag = session.FlagParkedRed
+
+	if got := neighbourInRing(items, s["api"], true, isLive); got != s["desk"] {
+		t.Errorf("next from api should skip the parked-red session, got %v", got)
+	}
+	if got := neighbourInRing(items, s["desk"], false, isLive); got != s["api"] {
+		t.Errorf("prev from desk should skip the parked-red session, got %v", got)
+	}
+
+	s["dead"].Flag = session.FlagParkedBlue
+	if got := neighbourInRing(items, s["api"], true, isLive); got != s["dead"] {
+		t.Errorf("blue parking is not a skip, got %v", got)
+	}
+	s["dead"].Flag = session.FlagUnread
+	if got := neighbourInRing(items, s["api"], true, isLive); got != s["dead"] {
+		t.Errorf("unread is not a skip, got %v", got)
+	}
+
+	// Everything else parked red: nothing to switch to, back to the sidebar.
+	for _, id := range []string{"dead", "desk", "notes"} {
+		s[id].Flag = session.FlagParkedRed
+	}
+	if got := neighbourInRing(items, s["api"], true, isLive); got != nil {
+		t.Errorf("with every other session parked red, want nil, got %v", got)
+	}
+}
