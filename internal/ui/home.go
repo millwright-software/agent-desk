@@ -5141,7 +5141,8 @@ type switchSessionMsg struct {
 }
 
 // neighbourLiveSession returns the session before or after `from` in sidebar
-// order, considering only sessions whose tmux session actually exists.
+// order, considering only sessions whose tmux session actually exists and
+// that are not parked red (the u-key marker meaning "shelved, skip this").
 //
 // ⚠️ It walks h.flatItems, not h.instances, so the ring follows the order shown
 // on screen — including group ordering the user arranged themselves. Group
@@ -5160,11 +5161,20 @@ func (h *Home) neighbourLiveSession(from *session.Instance, forward bool) *sessi
 // needs a real tmux session behind it, so a test built from bare &Instance{}
 // values would see every session as dead and the ring as empty — the logic
 // would pass by vacuum. The predicate lets a test say what is live.
+//
+// Parked-red sessions are skipped HERE rather than in the predicate so the
+// rule is covered by the same tests as the rest of the ring. The flag is a
+// deliberate "not now" from the user; landing on one while flipping through
+// live work is exactly what they marked it to avoid. (Attaching from the list
+// still works, and clears the marker.)
 func neighbourInRing(items []session.Item, from *session.Instance, forward bool, isLive func(*session.Instance) bool) *session.Instance {
 	var live []*session.Instance
 	idx := -1
 	for _, item := range items {
 		if item.Type != session.ItemTypeSession || item.Session == nil {
+			continue
+		}
+		if item.Session.Flag == session.FlagParkedRed {
 			continue
 		}
 		if !isLive(item.Session) {
