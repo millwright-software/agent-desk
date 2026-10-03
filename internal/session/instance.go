@@ -94,6 +94,10 @@ type Instance struct {
 	// flips the session to FlagUnread once it passes. Zero otherwise.
 	SnoozeUntil time.Time `json:"snooze_until,omitempty"`
 
+	// SnoozeFromGroup is the group the session was in when snoozed, so a wake
+	// or cancel can put it back. Empty when not snoozed.
+	SnoozeFromGroup string `json:"snooze_from_group,omitempty"`
+
 	// ClaudeModel is the model ID last seen in the session JSONL (e.g.
 	// "claude-fable-5"); shown abbreviated in the session list
 	ClaudeModel string `json:"claude_model,omitempty"`

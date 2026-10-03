@@ -93,15 +93,19 @@ out of "Inactive" stay there until you move them or sweep again.
 
 ### Snooze a session (`s`)
 
-Parks the session (red dot, dim title, `zz Mon 7a` after the name) until a wake
-time, then flips it to the unread bookmark (green, "come back to this"). The
-picker offers 1 hour, 3 hours, tonight, tomorrow morning, Monday morning, next
-week, or a typed time: `30m`, `2h`, `7am`, `7:30pm`, `tomorrow 9am`, `mon`,
-`fri 9am`, `10/12`, `10/12 11:00`. Day-only entries wake at 7am.
+Moves the session into a "Snoozed" group pinned at the bottom of the list
+until a wake time, then returns it to the group it came from as the unread
+bookmark (green, "come back to this"). The row shows ⏰ when it wakes today
+and 📅 when later, with the wake time after the name (`7p`, `Mon 7a`,
+`10/12 7a`). The picker offers 1 hour, 3 hours, tonight, tomorrow morning,
+Monday morning, next week, or a typed time: `30m`, `2h`, `7am`, `7:30pm`,
+`tomorrow 9am`, `mon`, `fri 9am`, `10/12`, `10/12 11:00`. Day-only entries
+wake at 7am.
 
 While snoozed the session is skipped by `Shift+Left`/`Shift+Right` like red
-parking. `u` or attaching cancels the snooze. Waking changes only the marker;
-the session stays in whatever group it is in, including "Inactive".
+parking. `u` or attaching cancels the snooze and sends it home. The Snoozed
+group disappears when its last session leaves. If you move a snoozed session
+out of Snoozed by hand, it stays where you put it when it wakes.
 
 > **Note:** `M` opened an MCP Manager dialog in earlier versions. MCPs are now
 > managed from the CLI (`agent-desk mcp list|attach|detach`) — see the CLI

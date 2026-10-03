@@ -227,6 +227,14 @@ func parseClock(s string) (hour, minute int, ok bool) {
 	return hour, minute, true
 }
 
+// SnoozeWakesToday reports whether the wake time falls on today's calendar
+// day: the row shows a clock then, a calendar otherwise.
+func SnoozeWakesToday(t, now time.Time) bool {
+	y1, m1, d1 := t.Date()
+	y2, m2, d2 := now.Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
+}
+
 // FormatSnoozeUntil renders a wake time for the session row: "3:15p" today,
 // "Mon 7a" within the week, "10/12 7a" beyond.
 func FormatSnoozeUntil(t, now time.Time) string {

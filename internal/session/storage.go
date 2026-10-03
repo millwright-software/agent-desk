@@ -104,6 +104,9 @@ type InstanceData struct {
 	// SnoozeUntil is the wake time while Flag == FlagSnoozed
 	SnoozeUntil time.Time `json:"snooze_until,omitempty"`
 
+	// SnoozeFromGroup is the group to return to on wake
+	SnoozeFromGroup string `json:"snooze_from_group,omitempty"`
+
 	// LastLogActivityAt is the persisted transcript-mtime staleness signal
 	LastLogActivityAt time.Time `json:"last_log_activity_at,omitempty"`
 
@@ -277,7 +280,7 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			inst.OpenCodeSessionID, inst.OpenCodeDetectedAt,
 			inst.CodexSessionID, inst.CodexDetectedAt,
 			inst.LoadedMCPNames,
-			inst.ToolOptionsJSON, inst.ColorScheme, int(inst.Flag), lastLogActivity, snoozeUntil,
+			inst.ToolOptionsJSON, inst.ColorScheme, int(inst.Flag), lastLogActivity, snoozeUntil, inst.SnoozeFromGroup,
 		)
 
 		rows[i] = &statedb.InstanceRow{
@@ -427,7 +430,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
 			loadedMCPs,
-			toolOpts, colorScheme, flag, lastLogUnix, snoozeUnix := statedb.UnmarshalToolData(r.ToolData)
+			toolOpts, colorScheme, flag, lastLogUnix, snoozeUnix, snoozeFrom := statedb.UnmarshalToolData(r.ToolData)
 
 		instances[i] = &InstanceData{
 			Acknowledged:       r.Acknowledged,
@@ -463,6 +466,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			ColorScheme:        colorScheme,
 			Flag:               SessionFlag(flag),
 			SnoozeUntil:        unixToTime(snoozeUnix),
+			SnoozeFromGroup:    snoozeFrom,
 			LastLogActivityAt:  unixToTime(lastLogUnix),
 		}
 	}
@@ -514,7 +518,7 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
 			loadedMCPs,
-			toolOpts, colorScheme, flag, lastLogUnix, snoozeUnix := statedb.UnmarshalToolData(r.ToolData)
+			toolOpts, colorScheme, flag, lastLogUnix, snoozeUnix, snoozeFrom := statedb.UnmarshalToolData(r.ToolData)
 
 		data.Instances[i] = &InstanceData{
 			Acknowledged:       r.Acknowledged,
@@ -550,6 +554,7 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			ColorScheme:        colorScheme,
 			Flag:               SessionFlag(flag),
 			SnoozeUntil:        unixToTime(snoozeUnix),
+			SnoozeFromGroup:    snoozeFrom,
 			LastLogActivityAt:  unixToTime(lastLogUnix),
 		}
 	}
@@ -718,6 +723,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			ColorScheme:        instData.ColorScheme,
 			Flag:               instData.Flag,
 			SnoozeUntil:        instData.SnoozeUntil,
+			SnoozeFromGroup:    instData.SnoozeFromGroup,
 			lastLogActivityAt:  instData.LastLogActivityAt,
 			tmuxSession:        tmuxSess,
 		}

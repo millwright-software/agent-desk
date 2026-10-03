@@ -256,6 +256,7 @@ var (
 	SessionTitleUnread     lipgloss.Style
 	SessionTitleParkedRed  lipgloss.Style
 	SessionTitleParkedBlue lipgloss.Style
+	SessionTitleSnoozed    lipgloss.Style
 	SessionTitleSelStyle   lipgloss.Style
 
 	// Selection indicator
@@ -518,6 +519,7 @@ func initStyles() {
 	SessionTitleUnread = lipgloss.NewStyle().Foreground(ColorGreenDim).Bold(true)
 	SessionTitleParkedRed = lipgloss.NewStyle().Foreground(ColorRed).Faint(true)
 	SessionTitleParkedBlue = lipgloss.NewStyle().Foreground(ColorAccent).Faint(true).Italic(true)
+	SessionTitleSnoozed = lipgloss.NewStyle().Foreground(ColorTextDim)
 	SessionTitleSelStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorBg).Background(ColorAccent)
 
 	// Selection indicator

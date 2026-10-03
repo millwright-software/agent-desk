@@ -16,7 +16,7 @@ func TestToolDataRoundtripFlag(t *testing.T) {
 		"", time.Time{},
 		[]string{"mcp-a"},
 		nil, "ocean", 3, 1750009999, // FlagParkedBlue, lastLogActivity
-		1750020000, // snoozeUntil
+		1750020000, "Work", // snoozeUntil, snoozeFromGroup
 	)
 
 	claudeSID, claudeAt, claudeModel,
@@ -25,7 +25,7 @@ func TestToolDataRoundtripFlag(t *testing.T) {
 		_, _,
 		_, _,
 		mcps,
-		_, colorScheme, flag, lastLog, snooze := UnmarshalToolData(blob)
+		_, colorScheme, flag, lastLog, snooze, snoozeFrom := UnmarshalToolData(blob)
 
 	if claudeSID != "claude-sid" {
 		t.Errorf("claudeSID = %q, want claude-sid", claudeSID)
@@ -51,14 +51,17 @@ func TestToolDataRoundtripFlag(t *testing.T) {
 	if snooze != 1750020000 {
 		t.Errorf("snoozeUntil = %d, want 1750020000", snooze)
 	}
+	if snoozeFrom != "Work" {
+		t.Errorf("snoozeFromGroup = %q, want Work", snoozeFrom)
+	}
 
 	// Clean session stays clean
 	blob = MarshalToolData(
 		"", time.Time{}, "", "", time.Time{}, nil, "",
 		"", time.Time{}, "", time.Time{},
-		nil, nil, "", 0, 0, 0,
+		nil, nil, "", 0, 0, 0, "",
 	)
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, flag, lastLog, snooze = UnmarshalToolData(blob)
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, flag, lastLog, snooze, _ = UnmarshalToolData(blob)
 	if flag != 0 || lastLog != 0 || snooze != 0 {
 		t.Errorf("expected clean flag/lastLog/snooze, got %d/%d/%d", flag, lastLog, snooze)
 	}
@@ -68,7 +71,7 @@ func TestToolDataRoundtripFlag(t *testing.T) {
 // parked bool (before the Flag enum existed) maps to FlagParkedRed (2).
 func TestToolDataLegacyParkedMigration(t *testing.T) {
 	legacy, _ := json.Marshal(map[string]any{"parked": true})
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, flag, _, _ := UnmarshalToolData(legacy)
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, flag, _, _, _ := UnmarshalToolData(legacy)
 	if flag != 2 {
 		t.Errorf("legacy parked should migrate to flag 2 (FlagParkedRed), got %d", flag)
 	}
