@@ -181,6 +181,7 @@ agent-desk remove "Codex Review" && agent-desk remove "Gemini Arch"
 | `R` (Shift+R) | Restart / reconnect (also reloads MCPs) |
 | `M` (Shift+M) | Sweep idle sessions into an "Inactive" group |
 | `u` | Cycle marker: unread → parked → normal |
+| `s` | Snooze until a time; wakes as unread |
 | `d` | Delete |
 | `m` | Move to group |
 

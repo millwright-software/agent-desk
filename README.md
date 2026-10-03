@@ -59,6 +59,7 @@ agent-desk add . -c claude        # add the current dir as a Claude session
 | `n` · `d` | New session · delete |
 | `g` · `G` | New group · new top-level group |
 | `m` · `e` | Move session to a group · rename group |
+| `s` · `u` | Snooze until a time · cycle unread / parked marker |
 | `Shift+↑` / `Shift+↓` | Move a group or session up/down |
 | `Tab` · `1`–`9` | Expand/collapse group · jump to group |
 | `?` | Every shortcut |

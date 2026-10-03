@@ -154,6 +154,7 @@ type Home struct {
 	analyticsPanel       *AnalyticsPanel       // For displaying session analytics
 	geminiModelDialog    *GeminiModelDialog    // For selecting Gemini model
 	colorSchemeDialog    *ColorSchemeDialog    // For picking a per-session color scheme
+	snoozeDialog         *SnoozeDialog         // For parking a session until a wake time (s key)
 	sessionPickerDialog  *SessionPickerDialog  // For sending output to another session
 	worktreeFinishDialog *WorktreeFinishDialog // For finishing worktree sessions (merge + cleanup)
 	worktreeManager      *WorktreeManager      // For listing worktrees and removing orphans
@@ -530,6 +531,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		analyticsPanel:       NewAnalyticsPanel(),
 		geminiModelDialog:    NewGeminiModelDialog(),
 		colorSchemeDialog:    NewColorSchemeDialog(),
+		snoozeDialog:         NewSnoozeDialog(),
 		sessionPickerDialog:  NewSessionPickerDialog(),
 		worktreeFinishDialog: NewWorktreeFinishDialog(),
 		worktreeManager:      NewWorktreeManager(),
@@ -2139,6 +2141,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.settingsPanel.SetSize(msg.Width, msg.Height)
 		h.geminiModelDialog.SetSize(msg.Width, msg.Height)
 		h.colorSchemeDialog.SetSize(msg.Width, msg.Height)
+		h.snoozeDialog.SetSize(msg.Width, msg.Height)
 		return h, nil
 
 	case loadSessionsMsg:
@@ -2628,6 +2631,16 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
+	case snoozeSetMsg:
+		h.instancesMu.RLock()
+		inst := h.instanceByID[msg.instanceID]
+		h.instancesMu.RUnlock()
+		if inst != nil {
+			inst.Snooze(msg.until)
+			h.forceSaveInstances()
+		}
+		return h, nil
+
 	case colorSchemeSelectedMsg:
 		// Apply the chosen color scheme to the session (tmux + persisted), then
 		// refresh the preview so the pane tint updates immediately.
@@ -3044,6 +3057,13 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case tickMsg:
+		// Wake due snoozes: flag flips to unread, group stays put. Cheap and
+		// in-memory, so it runs every tick regardless of the activity gates
+		// below.
+		if h.wakeDueSnoozes(time.Time(msg)) {
+			h.saveInstances()
+		}
+
 		// Auto-dismiss errors after 5 seconds
 		if h.err != nil && !h.errTime.IsZero() && time.Since(h.errTime) > 5*time.Second {
 			h.clearError()
@@ -3264,6 +3284,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.colorSchemeDialog.IsVisible() {
 			d, cmd := h.colorSchemeDialog.Update(msg)
 			h.colorSchemeDialog = d
+			return h, cmd
+		}
+		if h.snoozeDialog.IsVisible() {
+			d, cmd := h.snoozeDialog.Update(msg)
+			h.snoozeDialog = d
 			return h, cmd
 		}
 		if h.sessionPickerDialog.IsVisible() {
@@ -4085,12 +4110,26 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if item.Type == session.ItemTypeSession && item.Session != nil {
 				inst := item.Session
 				inst.Flag = inst.Flag.Next()
+				// u on a snoozed session cancels the snooze (Next lands on none).
+				inst.SnoozeUntil = time.Time{}
 				// Setting any marker mutes the session's auto-attention so the
 				// bookmark stays quiet; the dot color is the only signal.
 				if inst.Flag.IsSet() {
 					inst.Acknowledge()
 				}
 				h.saveInstances()
+			}
+		}
+		return h, nil
+
+	case "s":
+		// Snooze: park the session until a wake time, after which the tick
+		// flips it to the unread bookmark. Grouping is left alone on wake.
+		if h.cursor < len(h.flatItems) {
+			item := h.flatItems[h.cursor]
+			if item.Type == session.ItemTypeSession && item.Session != nil {
+				h.snoozeDialog.SetSize(h.width, h.height)
+				h.snoozeDialog.Show(item.Session.ID, item.Session.Title)
 			}
 		}
 		return h, nil
@@ -4177,6 +4216,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open per-session color scheme picker for the selected session
 		if inst := h.getSelectedSession(); inst != nil {
 			h.colorSchemeDialog.SetSize(h.width, h.height)
+			h.snoozeDialog.SetSize(h.width, h.height)
 			h.colorSchemeDialog.Show(inst.ID, inst.ColorScheme)
 		}
 		return h, nil
@@ -4551,6 +4591,21 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // saveInstances saves instances to storage
+// wakeDueSnoozes flips every snoozed session whose wake time has passed to
+// the unread bookmark. Returns true if anything changed.
+func (h *Home) wakeDueSnoozes(now time.Time) bool {
+	h.instancesMu.RLock()
+	defer h.instancesMu.RUnlock()
+	changed := false
+	for _, inst := range h.instances {
+		if inst.SnoozeDue(now) {
+			inst.WakeFromSnooze()
+			changed = true
+		}
+	}
+	return changed
+}
+
 func (h *Home) saveInstances() {
 	h.saveInstancesWithForce(false)
 }
@@ -5063,6 +5118,7 @@ func (h *Home) attachSessionWithBanner(inst *session.Instance, banner *tmux.Atta
 	// opening it means you've dealt with it, so the overlay is now stale. The
 	// SaveWithGroups below persists the cleared flag.
 	inst.Flag = session.FlagNone
+	inst.SnoozeUntil = time.Time{}
 
 	// Skip saving during reload to avoid overwriting external changes
 	// THREAD-SAFE: Read isReloading under mutex
@@ -5222,7 +5278,7 @@ func neighbourInRing(items []session.Item, from *session.Instance, forward bool,
 		if item.Session == from {
 			fromPos = pos
 		}
-		if item.Session.Flag == session.FlagParkedRed {
+		if item.Session.Flag.IsSkipped() {
 			continue
 		}
 		if !isLive(item.Session) {
@@ -5478,6 +5534,7 @@ func (h *Home) updateSizes() {
 	h.confirmDialog.SetSize(h.width, h.height)
 	h.geminiModelDialog.SetSize(h.width, h.height)
 	h.colorSchemeDialog.SetSize(h.width, h.height)
+	h.snoozeDialog.SetSize(h.width, h.height)
 	h.worktreeFinishDialog.SetSize(h.width, h.height)
 	h.worktreeManager.SetSize(h.width, h.height)
 }
@@ -5550,6 +5607,9 @@ func (h *Home) View() string {
 	}
 	if h.geminiModelDialog.IsVisible() {
 		return h.geminiModelDialog.View()
+	}
+	if h.snoozeDialog.IsVisible() {
+		return h.snoozeDialog.View()
 	}
 	if h.colorSchemeDialog.IsVisible() {
 		return h.colorSchemeDialog.View()
@@ -6849,6 +6909,11 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		statusIcon = "●"
 		statusStyle = SessionStatusParkedBlue
 		titleStyle = SessionTitleParkedBlue
+	case session.FlagSnoozed:
+		// Snoozed: looks parked red, plus the wake time after the title
+		statusIcon = "●"
+		statusStyle = SessionStatusParked
+		titleStyle = SessionTitleParkedRed
 	}
 
 	// Selection indicator. We deliberately do NOT restyle the status dot here:
@@ -6870,6 +6935,16 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 
 	status := statusStyle.Render(statusIcon)
 	title := titleStyle.Render(inst.Title)
+
+	// Snooze badge: when the session wakes ("zz Mon 7a")
+	snoozeBadge := ""
+	if inst.Flag == session.FlagSnoozed && !inst.SnoozeUntil.IsZero() {
+		szStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+		if selected {
+			szStyle = SessionStatusSelStyle
+		}
+		snoozeBadge = szStyle.Render(" zz " + session.FormatSnoozeUntil(inst.SnoozeUntil, time.Now()))
+	}
 
 	// Worktree branch badge for sessions running in git worktrees
 	worktreeBadge := ""
@@ -6926,7 +7001,7 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 	}
 
 	// Build row: [baseIndent][selection][tree][status] [swatch][title] [worktree][model][staleness]
-	row := fmt.Sprintf("%s%s%s %s %s%s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, colorSwatch, title, worktreeBadge, modelBadge, staleness)
+	row := fmt.Sprintf("%s%s%s %s %s%s%s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, colorSwatch, title, snoozeBadge, worktreeBadge, modelBadge, staleness)
 	b.WriteString(row)
 	b.WriteString("\n")
 }

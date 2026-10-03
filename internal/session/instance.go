@@ -90,6 +90,10 @@ type Instance struct {
 	// flagged session never counts as a waiting/attention session.
 	Flag SessionFlag `json:"flag,omitempty"`
 
+	// SnoozeUntil is the wake time while Flag == FlagSnoozed. The home tick
+	// flips the session to FlagUnread once it passes. Zero otherwise.
+	SnoozeUntil time.Time `json:"snooze_until,omitempty"`
+
 	// ClaudeModel is the model ID last seen in the session JSONL (e.g.
 	// "claude-fable-5"); shown abbreviated in the session list
 	ClaudeModel string `json:"claude_model,omitempty"`

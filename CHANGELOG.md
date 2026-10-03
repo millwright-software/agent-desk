@@ -11,6 +11,17 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+### Added
+- **Snooze a session (`s`).** Park it until a wake time, after which it surfaces as the unread bookmark
+  (green, "come back to this"). The picker offers 1 hour, 3 hours, tonight, tomorrow morning, Monday
+  morning, next week, or a typed time (`30m`, `2h`, `7am`, `7:30pm`, `tomorrow 9am`, `mon`, `fri 9am`,
+  `10/12`, `10/12 11:00`; day-only entries wake at 7am). While snoozed the row shows a red dot, a dim
+  title and the wake time (`zz Mon 7a`), and attached `Shift+Left`/`Shift+Right` skip it like red parking.
+  `u` or attaching cancels the snooze. Waking flips only the marker: the session stays in its group,
+  including "Inactive", by the same call that keeps `Shift+M` a one-shot sweep. The wake time persists
+  in `tool_data` (`snooze_until`), so a snooze survives restarts; the home tick checks it every 2 s.
+  Fifth flag value `FlagSnoozed` (appended, stable order kept).
+
 ## [1.0.20] - 2026-10-03
 
 ### Fixed
