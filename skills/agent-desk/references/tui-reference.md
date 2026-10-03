@@ -27,6 +27,7 @@ Complete reference for agent-desk Terminal UI features.
 | `M` | Sweep idle sessions into an "Inactive" group |
 | `d` | Delete session or group |
 | `u` | Cycle marker: unread → parked red → parked blue → normal |
+| `s` | Snooze: park until a time, then wake as unread |
 
 ### Group Actions
 
@@ -89,6 +90,18 @@ dismisses it, or it clears itself after 30 seconds.
 
 This is a one-shot sweep, not a live group-by-status view — sessions you restart
 out of "Inactive" stay there until you move them or sweep again.
+
+### Snooze a session (`s`)
+
+Parks the session (red dot, dim title, `zz Mon 7a` after the name) until a wake
+time, then flips it to the unread bookmark (green, "come back to this"). The
+picker offers 1 hour, 3 hours, tonight, tomorrow morning, Monday morning, next
+week, or a typed time: `30m`, `2h`, `7am`, `7:30pm`, `tomorrow 9am`, `mon`,
+`fri 9am`, `10/12`, `10/12 11:00`. Day-only entries wake at 7am.
+
+While snoozed the session is skipped by `Shift+Left`/`Shift+Right` like red
+parking. `u` or attaching cancels the snooze. Waking changes only the marker;
+the session stays in whatever group it is in, including "Inactive".
 
 > **Note:** `M` opened an MCP Manager dialog in earlier versions. MCPs are now
 > managed from the CLI (`agent-desk mcp list|attach|detach`) — see the CLI

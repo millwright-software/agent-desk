@@ -101,6 +101,9 @@ type InstanceData struct {
 	// Flag is the manual u-key marker (none/unread/parked); purely visual
 	Flag SessionFlag `json:"flag,omitempty"`
 
+	// SnoozeUntil is the wake time while Flag == FlagSnoozed
+	SnoozeUntil time.Time `json:"snooze_until,omitempty"`
+
 	// LastLogActivityAt is the persisted transcript-mtime staleness signal
 	LastLogActivityAt time.Time `json:"last_log_activity_at,omitempty"`
 
@@ -262,6 +265,10 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 		if !inst.lastLogActivityAt.IsZero() {
 			lastLogActivity = inst.lastLogActivityAt.Unix()
 		}
+		var snoozeUntil int64
+		if !inst.SnoozeUntil.IsZero() {
+			snoozeUntil = inst.SnoozeUntil.Unix()
+		}
 
 		toolData := statedb.MarshalToolData(
 			inst.ClaudeSessionID, inst.ClaudeDetectedAt, inst.ClaudeModel,
@@ -270,7 +277,7 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			inst.OpenCodeSessionID, inst.OpenCodeDetectedAt,
 			inst.CodexSessionID, inst.CodexDetectedAt,
 			inst.LoadedMCPNames,
-			inst.ToolOptionsJSON, inst.ColorScheme, int(inst.Flag), lastLogActivity,
+			inst.ToolOptionsJSON, inst.ColorScheme, int(inst.Flag), lastLogActivity, snoozeUntil,
 		)
 
 		rows[i] = &statedb.InstanceRow{
@@ -420,7 +427,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
 			loadedMCPs,
-			toolOpts, colorScheme, flag, lastLogUnix := statedb.UnmarshalToolData(r.ToolData)
+			toolOpts, colorScheme, flag, lastLogUnix, snoozeUnix := statedb.UnmarshalToolData(r.ToolData)
 
 		instances[i] = &InstanceData{
 			Acknowledged:       r.Acknowledged,
@@ -455,6 +462,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			LoadedMCPNames:     loadedMCPs,
 			ColorScheme:        colorScheme,
 			Flag:               SessionFlag(flag),
+			SnoozeUntil:        unixToTime(snoozeUnix),
 			LastLogActivityAt:  unixToTime(lastLogUnix),
 		}
 	}
@@ -506,7 +514,7 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
 			loadedMCPs,
-			toolOpts, colorScheme, flag, lastLogUnix := statedb.UnmarshalToolData(r.ToolData)
+			toolOpts, colorScheme, flag, lastLogUnix, snoozeUnix := statedb.UnmarshalToolData(r.ToolData)
 
 		data.Instances[i] = &InstanceData{
 			Acknowledged:       r.Acknowledged,
@@ -541,6 +549,7 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			LoadedMCPNames:     loadedMCPs,
 			ColorScheme:        colorScheme,
 			Flag:               SessionFlag(flag),
+			SnoozeUntil:        unixToTime(snoozeUnix),
 			LastLogActivityAt:  unixToTime(lastLogUnix),
 		}
 	}
@@ -708,6 +717,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			LoadedMCPNames:     instData.LoadedMCPNames,
 			ColorScheme:        instData.ColorScheme,
 			Flag:               instData.Flag,
+			SnoozeUntil:        instData.SnoozeUntil,
 			lastLogActivityAt:  instData.LastLogActivityAt,
 			tmuxSession:        tmuxSess,
 		}

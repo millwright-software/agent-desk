@@ -121,6 +121,7 @@ func (h *HelpOverlay) View() string {
 				{"Shift+M", "Sweep idle sessions to Inactive group"},
 				{"v", "Toggle preview mode (output/stats/both)"},
 				{"u", "Cycle unread → parked → normal"},
+				{"s", "Snooze until a time (wakes as unread)"},
 				{"K / J", "Reorder up/down"},
 				{"c", "Copy output to clipboard"},
 				{"x", "Send output to session"},
