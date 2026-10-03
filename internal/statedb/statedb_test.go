@@ -212,6 +212,40 @@ func TestAcknowledgedSync(t *testing.T) {
 	}
 }
 
+// ⚠️ The full save is INSERT OR REPLACE. Before the column rode along in the
+// row, every save silently reset acknowledged to 0, so a flag set by any TUI
+// vanished at the next unrelated save (a rename, a reorder).
+func TestAcknowledgedSurvivesFullSave(t *testing.T) {
+	db := newTestDB(t)
+	row := &InstanceRow{
+		ID: "ack2", Title: "Ack Save", ProjectPath: "/tmp", GroupPath: "grp",
+		Tool: "claude", Status: "idle", CreatedAt: time.Now(), ToolData: json.RawMessage("{}"),
+		Acknowledged: true,
+	}
+	if err := db.SaveInstances([]*InstanceRow{row}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.LoadInstances()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("load: %v (%d rows)", err, len(rows))
+	}
+	if !rows[0].Acknowledged {
+		t.Error("acknowledged lost on save/load round trip")
+	}
+	statuses, _ := db.ReadAllStatuses()
+	if !statuses["ack2"].Acknowledged {
+		t.Error("ReadAllStatuses disagrees with LoadInstances")
+	}
+	row.Acknowledged = false
+	if err := db.SaveInstance(row); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = db.LoadInstances()
+	if rows[0].Acknowledged {
+		t.Error("single save should write acknowledged=false")
+	}
+}
+
 func TestHeartbeat(t *testing.T) {
 	db := newTestDB(t)
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/millwright-software/agent-desk/internal/logging"
+	"github.com/millwright-software/agent-desk/internal/statedb"
 	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
@@ -121,6 +122,15 @@ type Instance struct {
 	tmuxSession *tmux.Session // Internal tmux session
 
 	// Hook-based status detection (set by StatusFileWatcher from Claude Code hooks)
+	// Acknowledged: the user has looked at this session since its last turn
+	// ended (orange → gray). ⚠️ THIS FIELD IS THE TRUTH. It is persisted in the
+	// instances.acknowledged column on every change, read back by other TUIs,
+	// and pushed into the tmux status engine's own copy so pattern-based
+	// detection agrees. Write it only through Acknowledge / ResetAcknowledged
+	// / setAcknowledgedLocked; never touch tmuxSession.Acknowledge() directly
+	// from outside this file.
+	Acknowledged bool `json:"-"`
+
 	hookStatus     string    // running, idle, waiting, dead (empty = no hook data)
 	hookEvent      string    // the Claude Code hook event behind hookStatus (Stop, PermissionRequest, ...)
 	hookSessionID  string    // Session ID from hook payload
@@ -1619,9 +1629,7 @@ func (i *Instance) UpdateStatus() error {
 			// Reset acknowledged: new activity means output not yet seen.
 			// Without this, a previously-acknowledged session would go straight
 			// to idle (gray) after Stop, skipping the waiting (orange) state.
-			if i.tmuxSession != nil {
-				i.tmuxSession.ResetAcknowledged()
-			}
+			i.setAcknowledgedLocked(false)
 		case "waiting":
 			// ⚠️ A PROMPT IS NOT "SEEN AND DEALT WITH". Acknowledgment exists for
 			// Stop: Claude finished, you looked, it goes gray. A permission
@@ -1631,7 +1639,7 @@ func (i *Instance) UpdateStatus() error {
 			// attached since — until the next event says Claude moved on.
 			// Before this, a session you had opened once sat gray with a
 			// question on screen, and Shift+Up / Shift+Down walked past it.
-			i.Status = statusForHookWaiting(i.hookEvent, i.tmuxSession != nil && i.tmuxSession.IsAcknowledged())
+			i.Status = statusForHookWaiting(i.hookEvent, i.Acknowledged)
 		case "dead":
 			i.Status = StatusError
 		}
@@ -1654,6 +1662,14 @@ func (i *Instance) UpdateStatus() error {
 	if err != nil {
 		i.Status = StatusError
 		return err
+	}
+
+	// Pattern-based detection is where the engine notices NEW OUTPUT since
+	// you looked and clears its own copy of the flag. Adopt its verdict so
+	// the column follows: the engine is the only thing that can see that.
+	if engineAck := i.tmuxSession.IsAcknowledged(); engineAck != i.Acknowledged {
+		i.Acknowledged = engineAck
+		persistAcknowledged(i.ID, engineAck)
 	}
 
 	// Map tmux status to instance status
@@ -1876,8 +1892,8 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 	// "seen" from before the prompt. Only on the first sight of this event —
 	// the watcher re-applies the same HookStatus every tick, and resetting
 	// each time would move waitingSince and break "waiting longest first".
-	if HookEventIsPrompt(status.Event) && !status.UpdatedAt.Equal(i.hookLastUpdate) && i.tmuxSession != nil {
-		i.tmuxSession.ResetAcknowledged()
+	if HookEventIsPrompt(status.Event) && !status.UpdatedAt.Equal(i.hookLastUpdate) {
+		i.setAcknowledgedLocked(false)
 	}
 
 	i.hookStatus = status.Status
@@ -3158,12 +3174,72 @@ func (i *Instance) GetTmuxSession() *tmux.Session {
 	return i.tmuxSession
 }
 
-// SetAcknowledgedFromShared applies an acknowledgment from another TUI instance
-// (read from SQLite). This transitions a YELLOW (waiting) session to GRAY (idle)
-// without requiring the user to interact with this specific TUI instance.
-func (i *Instance) SetAcknowledgedFromShared(ack bool) {
-	if ack && i.tmuxSession != nil {
-		i.tmuxSession.Acknowledge()
+// Acknowledge marks the session as looked at: attach, the u key, or the
+// Ctrl+b number shortcut. Persists the column and informs the engine.
+func (i *Instance) Acknowledge() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.setAcknowledgedLocked(true)
+}
+
+// ResetAcknowledged marks the session as needing a look.
+func (i *Instance) ResetAcknowledged() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.setAcknowledgedLocked(false)
+}
+
+// IsAcknowledged reports the flag with read-lock protection.
+func (i *Instance) IsAcknowledged() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.Acknowledged
+}
+
+// setAcknowledgedLocked is the one writer. Caller holds i.mu. The engine is
+// told every time (its ResetAcknowledged also stamps waitingSince, which the
+// running fast path relies on each tick); the column only when the value
+// changed, so a running session does not write a row every ten seconds.
+func (i *Instance) setAcknowledgedLocked(ack bool) {
+	changed := i.Acknowledged != ack
+	i.Acknowledged = ack
+	if i.tmuxSession != nil {
+		if ack {
+			i.tmuxSession.Acknowledge()
+		} else {
+			i.tmuxSession.ResetAcknowledged()
+		}
+	}
+	if changed {
+		persistAcknowledged(i.ID, ack)
+	}
+}
+
+// AdoptSharedAcknowledged applies the column as read back from the database,
+// where another TUI may have changed it. No write: the database is where
+// the value came from. Both directions — a reset in another window must
+// turn this one orange too.
+func (i *Instance) AdoptSharedAcknowledged(ack bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.Acknowledged == ack {
+		return
+	}
+	i.Acknowledged = ack
+	if i.tmuxSession != nil {
+		if ack {
+			i.tmuxSession.Acknowledge()
+		} else {
+			i.tmuxSession.ResetAcknowledged()
+		}
+	}
+}
+
+func persistAcknowledged(id string, ack bool) {
+	if db := statedb.GetGlobal(); db != nil {
+		if err := db.SetAcknowledged(id, ack); err != nil {
+			sessionLog.Warn("acknowledged_persist_failed", slog.String("id", id), slog.String("error", err.Error()))
+		}
 	}
 }
 

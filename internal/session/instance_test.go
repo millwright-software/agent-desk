@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/millwright-software/agent-desk/internal/statedb"
 	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
@@ -1746,7 +1747,7 @@ func TestStatusForHookWaiting_PromptOutranksAcknowledged(t *testing.T) {
 func TestInstance_UpdateHookStatus_PromptResetsAcknowledgedOnce(t *testing.T) {
 	inst := NewInstanceWithTool("hook-prompt-test", "/tmp/test", "claude")
 	inst.tmuxSession = tmux.NewSession("agentdesk_hook_prompt_test", "/tmp/test")
-	inst.tmuxSession.Acknowledge()
+	inst.Acknowledge()
 	if !inst.tmuxSession.IsAcknowledged() {
 		t.Fatal("precondition: acknowledged")
 	}
@@ -1762,7 +1763,7 @@ func TestInstance_UpdateHookStatus_PromptResetsAcknowledgedOnce(t *testing.T) {
 	}
 
 	// Attach (acknowledge), then the watcher re-applies the SAME status.
-	inst.tmuxSession.Acknowledge()
+	inst.Acknowledge()
 	inst.UpdateHookStatus(prompt)
 	if !inst.tmuxSession.IsAcknowledged() {
 		t.Error("re-applying the same prompt event must not reset again")
@@ -1777,6 +1778,70 @@ func TestInstance_UpdateHookStatus_PromptResetsAcknowledgedOnce(t *testing.T) {
 	inst.ClearHookStatus()
 	if inst.hookEvent != "" {
 		t.Errorf("ClearHookStatus should clear hookEvent, got %q", inst.hookEvent)
+	}
+}
+
+// The flag has one writer path: the instance, which persists the column
+// and informs the engine. Adopting from the database informs the engine
+// without writing back.
+func TestInstance_AcknowledgedIsPersistedAndMirrored(t *testing.T) {
+	db, err := statedb.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	prev := statedb.GetGlobal()
+	statedb.SetGlobal(db)
+	t.Cleanup(func() { statedb.SetGlobal(prev) })
+
+	inst := NewInstanceWithTool("ack-owner", "/tmp/test", "claude")
+	if err := db.SaveInstance(&statedb.InstanceRow{ID: inst.ID, Title: inst.Title, ProjectPath: "/tmp/test", Tool: "claude", Status: "waiting", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	column := func() bool {
+		st, err := db.ReadAllStatuses()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st[inst.ID].Acknowledged
+	}
+
+	inst.Acknowledge()
+	if !inst.IsAcknowledged() || !inst.tmuxSession.IsAcknowledged() || !column() {
+		t.Errorf("Acknowledge: field=%v engine=%v column=%v, want all true", inst.IsAcknowledged(), inst.tmuxSession.IsAcknowledged(), column())
+	}
+	inst.ResetAcknowledged()
+	if inst.IsAcknowledged() || inst.tmuxSession.IsAcknowledged() || column() {
+		t.Errorf("ResetAcknowledged: field=%v engine=%v column=%v, want all false", inst.IsAcknowledged(), inst.tmuxSession.IsAcknowledged(), column())
+	}
+
+	// Another TUI acknowledged it: adopt, inform the engine, do not write.
+	inst.AdoptSharedAcknowledged(true)
+	if !inst.IsAcknowledged() || !inst.tmuxSession.IsAcknowledged() {
+		t.Error("AdoptShared(true) should set the field and the engine")
+	}
+	if column() {
+		t.Error("AdoptShared must not write the column")
+	}
+	// And a reset elsewhere turns this one orange too.
+	inst.AdoptSharedAcknowledged(false)
+	if inst.IsAcknowledged() || inst.tmuxSession.IsAcknowledged() {
+		t.Error("AdoptShared(false) should clear the field and the engine")
+	}
+
+	// The hook fast path reads the field: Stop + acknowledged = idle.
+	inst.Acknowledge()
+	inst.UpdateHookStatus(&HookStatus{Status: "waiting", Event: "Stop", UpdatedAt: time.Now()})
+	if got := statusForHookWaiting(inst.hookEvent, inst.IsAcknowledged()); got != StatusIdle {
+		t.Errorf("Stop after acknowledge should be idle, got %q", got)
+	}
+	// A new prompt clears it, column included.
+	inst.UpdateHookStatus(&HookStatus{Status: "waiting", Event: "PermissionRequest", UpdatedAt: time.Now().Add(time.Second)})
+	if inst.IsAcknowledged() || column() {
+		t.Error("a new prompt should clear the field and the column")
 	}
 }
 

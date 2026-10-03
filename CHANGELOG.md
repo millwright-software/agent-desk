@@ -11,6 +11,22 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-10-03
+
+### Fixed
+- **Acknowledged ("you've looked at this") has one owner.** It was a flag inside the tmux status engine with
+  a SQLite mirror, and the mirror was wrong in both directions: the column was only ever written as `true`, every
+  full save (`INSERT OR REPLACE`, column not in the row) silently reset it to `0`, and every status tick
+  re-applied a `true` from the column onto memory. Visible result: a session that had been acknowledged once
+  could go straight to gray after its next finished turn instead of orange, with no bell. Now the instance owns
+  the flag: `Acknowledge` / `ResetAcknowledged` set it, write the column (both values, only on change), and
+  inform the engine; the column rides along in the row so saves preserve it; other TUIs' changes are adopted in
+  both directions. The engine keeps a copy because pattern-based detection (Gemini, Copilot, stale hooks) is
+  the only thing that can see "new output since you looked"; its verdict is adopted and persisted after each
+  pattern read. Second slice of consolidating status into table lookups, after the hook inbox in 1.0.19.
+  On first run with this version, sessions saved as idle count as acknowledged so nothing turns orange just
+  because the column had never been written.
+
 ## [1.0.19] - 2026-10-03
 
 ### Changed

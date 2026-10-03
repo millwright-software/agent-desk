@@ -57,6 +57,7 @@ type StorageData struct {
 
 // InstanceData represents the serializable session data
 type InstanceData struct {
+	Acknowledged    bool      `json:"-"` // from the acknowledged column; see Instance.Acknowledged
 	ID              string    `json:"id"`
 	Title           string    `json:"title"`
 	ProjectPath     string    `json:"project_path"`
@@ -290,6 +291,7 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			WorktreeRepo:    inst.WorktreeRepoRoot,
 			WorktreeBranch:  inst.WorktreeBranch,
 			ToolData:        toolData,
+			Acknowledged:    inst.IsAcknowledged(),
 		}
 	}
 
@@ -421,6 +423,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			toolOpts, colorScheme, flag, lastLogUnix := statedb.UnmarshalToolData(r.ToolData)
 
 		instances[i] = &InstanceData{
+			Acknowledged:       r.Acknowledged,
 			ID:                 r.ID,
 			Title:              SanitizeDisplayName(r.Title),
 			ProjectPath:        normalizeProjectPath(r.ProjectPath),
@@ -506,6 +509,7 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			toolOpts, colorScheme, flag, lastLogUnix := statedb.UnmarshalToolData(r.ToolData)
 
 		data.Instances[i] = &InstanceData{
+			Acknowledged:       r.Acknowledged,
 			ID:                 r.ID,
 			Title:              SanitizeDisplayName(r.Title),
 			ProjectPath:        normalizeProjectPath(r.ProjectPath),
@@ -654,6 +658,14 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			// Note: EnableMouseMode is now deferred to EnsureConfigured()
 			// Called automatically when user attaches to session
 		}
+		// Seed the acknowledgment from the column. Databases written before
+		// the column rode along in the row have it at 0 for everything, so a
+		// session that was saved as idle (gray) counts as seen too; the next
+		// save writes the column and the fallback stops mattering.
+		acknowledged := instData.Acknowledged || instData.Status == StatusIdle
+		if acknowledged && tmuxSess != nil {
+			tmuxSess.Acknowledge()
+		}
 
 		// Migrate old sessions without GroupPath
 		groupPath := instData.GroupPath
@@ -665,6 +677,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 		projectPath := expandTilde(instData.ProjectPath)
 
 		inst := &Instance{
+			Acknowledged:       acknowledged,
 			ID:                 instData.ID,
 			Title:              instData.Title,
 			ProjectPath:        projectPath,

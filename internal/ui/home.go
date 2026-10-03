@@ -1830,8 +1830,8 @@ func (h *Home) backgroundStatusUpdate() {
 		// Read acknowledgments from SQLite (picks up acks from other instances)
 		if ackStatuses, err := db.ReadAllStatuses(); err == nil {
 			for _, inst := range instances {
-				if s, ok := ackStatuses[inst.ID]; ok && s.Acknowledged {
-					inst.SetAcknowledgedFromShared(true)
+				if s, ok := ackStatuses[inst.ID]; ok {
+					inst.AdoptSharedAcknowledged(s.Acknowledged)
 				}
 			}
 		}
@@ -1894,11 +1894,7 @@ func (h *Home) syncNotificationsBackground() {
 	if sessionToAcknowledgeID != "" {
 		if inst, ok := h.instanceByID[sessionToAcknowledgeID]; ok {
 			if ts := inst.GetTmuxSession(); ts != nil {
-				ts.Acknowledge()
-				// Persist ack to SQLite so other instances see it
-				if db := statedb.GetGlobal(); db != nil {
-					_ = db.SetAcknowledged(inst.ID, true)
-				}
+				inst.Acknowledge()
 				_ = inst.UpdateStatus()
 				notifLog.Debug("session_acknowledged", slog.String("title", inst.Title), slog.String("status", string(inst.Status)))
 			}
@@ -4092,12 +4088,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Setting any marker mutes the session's auto-attention so the
 				// bookmark stays quiet; the dot color is the only signal.
 				if inst.Flag.IsSet() {
-					if tmuxSess := inst.GetTmuxSession(); tmuxSess != nil {
-						tmuxSess.Acknowledge()
-					}
-					if db := statedb.GetGlobal(); db != nil {
-						_ = db.SetAcknowledged(inst.ID, true)
-					}
+					inst.Acknowledge()
 				}
 				h.saveInstances()
 			}
@@ -5111,11 +5102,7 @@ skipSave:
 	// - YELLOW (waiting) sessions turn gray when user looks at them
 	// - Detach just lets polling take over naturally
 	if inst.GetStatusThreadSafe() == session.StatusWaiting {
-		tmuxSess.Acknowledge()
-		// Persist ack to SQLite so other instances see it
-		if db := statedb.GetGlobal(); db != nil {
-			_ = db.SetAcknowledged(inst.ID, true)
-		}
+		inst.Acknowledge()
 		statusLog.Debug("acknowledged_on_attach", slog.String("title", inst.Title))
 	}
 
