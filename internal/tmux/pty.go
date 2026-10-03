@@ -125,7 +125,7 @@ func switchForBytes(b []byte) SwitchDirection {
 // Attach attaches to the tmux session with full PTY support.
 // Ctrl+Q detaches and returns to the caller.
 func (s *Session) Attach(ctx context.Context) error {
-	_, err := s.AttachSwitchable(ctx, nil)
+	_, err := s.AttachSwitchable(ctx, nil, nil)
 	return err
 }
 
@@ -138,9 +138,15 @@ func (s *Session) Attach(ctx context.Context) error {
 // switch, where you did not pick the session from a list and may not know
 // which one you are looking at.
 //
+// canSwitch, when non-nil, is asked before a Shift+Up / Shift+Down detach
+// whether there is anywhere to go. If it says no, the attach STAYS and a card
+// says so: dropping to the sidebar just to report "nothing waiting" would
+// throw away the place you were working. Shift+Left / Shift+Right do not ask;
+// with one live session they return to the sidebar, which is documented.
+//
 // The plain Attach wrapper stays because tea.ExecCommand fixes Run() error, and
 // the CLI's `session attach` has no session ring to move around in.
-func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (SwitchDirection, error) {
+func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner, canSwitch func(SwitchDirection) bool) (SwitchDirection, error) {
 	switchTo := SwitchNone
 	if !s.Exists() {
 		return switchTo, fmt.Errorf("session %s does not exist", s.Name)
@@ -225,18 +231,26 @@ func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (S
 	// Initial resize
 	sigwinch <- syscall.SIGWINCH
 
-	// Landing card. Opened from a goroutine once the tmux client registers;
-	// the first keystroke below dismisses it so nothing typed is swallowed.
+	// Cards over the session: the landing card now, and later a "nothing
+	// waiting" card if Shift+Up / Shift+Down find nowhere to go. Each is
+	// opened from a goroutine once the tmux client registers; the first
+	// keystroke below dismisses it so nothing typed is swallowed.
+	exe, exeErr := os.Executable()
+	openCard := func(b AttachBanner) *bannerPopup {
+		if exeErr != nil {
+			return nil
+		}
+		cols := 0
+		if ws, err := pty.GetsizeFull(os.Stdin); err == nil {
+			cols = int(ws.Cols)
+		}
+		p := &bannerPopup{sessionName: s.Name, clientPID: cmd.Process.Pid, exe: exe, banner: b, cols: cols, started: time.Now()}
+		go p.show(ctx)
+		return p
+	}
 	var popup *bannerPopup
 	if banner != nil {
-		if exe, err := os.Executable(); err == nil {
-			cols := 0
-			if ws, err := pty.GetsizeFull(os.Stdin); err == nil {
-				cols = int(ws.Cols)
-			}
-			popup = &bannerPopup{sessionName: s.Name, clientPID: cmd.Process.Pid, exe: exe, banner: *banner, cols: cols, started: time.Now()}
-			go popup.show(ctx)
-		}
+		popup = openCard(*banner)
 	}
 
 	// Channel to signal detach via Ctrl+Q
@@ -303,6 +317,15 @@ func (s *Session) AttachSwitchable(ctx context.Context, banner *AttachBanner) (S
 			// select below returns as soon as it does, so a write afterwards
 			// races the caller's read and the switch is silently dropped.
 			if dir := switchForBytes(buf[:n]); dir != SwitchNone {
+				if dir.Waiting() && canSwitch != nil && !canSwitch(dir) {
+					// Nowhere to go. Stay here and say so; replace whatever
+					// card is up (the landing card may still be showing).
+					if popup != nil {
+						popup.dismiss(nil)
+					}
+					popup = openCard(AttachBanner{Title: "Nothing waiting", Subtitle: "no session needs you right now"})
+					continue
+				}
 				switchTo = dir
 				close(detachCh)
 				cancel()
