@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/millwright-software/agent-desk/internal/session"
+	"github.com/millwright-software/agent-desk/internal/statedb"
 )
 
 func TestMapEventToStatus(t *testing.T) {
@@ -111,6 +114,49 @@ func TestHookHandler_WritesStatusFile(t *testing.T) {
 	}
 	if read.Event != "PermissionRequest" {
 		t.Errorf("Event = %q, want PermissionRequest", read.Event)
+	}
+}
+
+// The handler's real output is a row in the inbox table under $HOME.
+func TestHookHandler_WritesInboxRow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTDESK_INSTANCE_ID", "inst-inbox-test")
+	payload := `{"hook_event_name":"PermissionRequest","session_id":"sess-9"}`
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(payload); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	handleHookHandler()
+
+	inbox, err := statedb.OpenHookInbox(session.HookInboxPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inbox.Close()
+	all, err := inbox.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := all["inst-inbox-test"]
+	if !ok || ev.Status != "waiting" || ev.Event != "PermissionRequest" || ev.SessionID != "sess-9" {
+		t.Fatalf("inbox row = %+v (ok=%v)", ev, ok)
+	}
+	if time.Since(ev.At) > time.Minute {
+		t.Errorf("timestamp not recent: %v", ev.At)
+	}
+	// And no fallback file was written.
+	if _, err := os.Stat(filepath.Join(home, ".agent-desk", "hooks", "inst-inbox-test.json")); err == nil {
+		t.Error("fallback file written although the inbox succeeded")
 	}
 }
 

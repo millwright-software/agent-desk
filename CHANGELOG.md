@@ -11,6 +11,23 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-10-03
+
+### Changed
+- **Claude Code hook events land in one SQLite table instead of one JSON file per session.** The hook handler
+  upserts a row in `~/.agent-desk/hooks.db` (instance, status, event, Claude session ID, time); the TUI reads
+  the table once per status tick. Gone: the `~/.agent-desk/hooks/` file-per-instance side channel, the fsnotify
+  watcher, and its debounce. Existing files are imported once at startup (newest wins) and left in place;
+  `agent-desk hooks status` reports both. Rows for instances deleted more than a day ago are pruned hourly.
+  First slice of consolidating status into table lookups; the acknowledged flag is next.
+  ⚠️ The inbox is its own file, not a table in the profile's `state.db`: the handler only knows the instance
+  ID, not the profile, and instance IDs are globally unique. It also keeps hook writers off `state.db`'s lock.
+  Contention was measured with the same driver before committing to this: 30 concurrent handler processes,
+  zero lock errors, typical write 0.5 ms, worst 10 ms; 100 processes, worst 98 ms. The hook is async in Claude
+  Code, so none of that is on your path. If the table cannot be written the handler falls back to the old file.
+  A TUI still running from before this release keeps reading files and will go stale for sessions started
+  after the upgrade: restart it.
+
 ## [1.0.18] - 2026-10-03
 
 ### Fixed
