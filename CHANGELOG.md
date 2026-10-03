@@ -11,6 +11,21 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.15] - 2026-10-02
+
+### Added
+- **`Shift+Down` / `Shift+Up` while attached jump to the next or previous session that is waiting for you**,
+  in sidebar order, wrapping at the ends. "Waiting" is the green dot: Claude asked a question or wants a
+  permission. The session you are leaving is usually not waiting any more (attaching acknowledged it), so the
+  walk goes by its position in the list rather than its place in the ring: down really is the next one below,
+  up the next one above. With nothing waiting you land back in the sidebar with a notice instead of the key
+  looking like it did nothing. Parked-red sessions are skipped, as with `Shift+Left` / `Shift+Right`.
+  Idea borrowed from Juggler's "jump to next session awaiting you" command (see `JUGGLER-PORT-CANDIDATES.md`).
+
+### Changed
+- `Shift+Right` / `Shift+Left` from a session that died while attached now continue from its position in the
+  list instead of jumping to the first live session.
+
 ## [1.0.14] - 2026-09-18
 
 ### Changed

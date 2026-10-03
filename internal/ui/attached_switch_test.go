@@ -110,7 +110,60 @@ func TestRingHandlesTheSourceSessionDying(t *testing.T) {
 	isLive := live("old-spike", "api-refactor") // we were in api-refactor; it died
 	got := neighbourInRing(items, s["api"], true, isLive)
 	if got != s["desk"] {
-		t.Errorf("source session dead: next = %v, want agent-desk (first live)", idOf(got))
+		t.Errorf("source session dead: next = %v, want agent-desk (next below)", idOf(got))
+	}
+	// Backwards from the dead one: nothing above it, so wrap to the bottom.
+	if got := neighbourInRing(items, s["api"], false, isLive); got != s["notes"] {
+		t.Errorf("source session dead: prev = %v, want notes (wrap to bottom)", idOf(got))
+	}
+}
+
+// Shift+Down / Shift+Up: the predicate is "waiting on you", and the session
+// being left is normally NOT a candidate (attaching acknowledged it). The walk
+// must then go by list position: down finds the next waiting one below, up
+// the next above, each wrapping at the ends.
+func TestWaitingRingWalksFromListPosition(t *testing.T) {
+	items, s := fixture() // list order: api, old-spike, desk, notes
+	waiting := func(ids ...string) func(*session.Instance) bool {
+		w := map[string]bool{}
+		for _, id := range ids {
+			w[id] = true
+		}
+		return func(i *session.Instance) bool { return w[i.ID] }
+	}
+
+	// From old-spike (not waiting): down → desk, up → api.
+	isWaiting := waiting("api-refactor", "agent-desk")
+	if got := neighbourInRing(items, s["dead"], true, isWaiting); got != s["desk"] {
+		t.Errorf("down from old-spike = %v, want agent-desk", idOf(got))
+	}
+	if got := neighbourInRing(items, s["dead"], false, isWaiting); got != s["api"] {
+		t.Errorf("up from old-spike = %v, want api-refactor", idOf(got))
+	}
+
+	// From notes (bottom, not waiting): down wraps to the top waiting one.
+	if got := neighbourInRing(items, s["notes"], true, isWaiting); got != s["api"] {
+		t.Errorf("down from notes = %v, want api-refactor (wrap)", idOf(got))
+	}
+	// From api (top, not waiting): up wraps to the bottom waiting one.
+	isWaiting = waiting("agent-desk", "notes")
+	if got := neighbourInRing(items, s["api"], false, isWaiting); got != s["notes"] {
+		t.Errorf("up from api = %v, want notes (wrap)", idOf(got))
+	}
+
+	// Only one session waiting and we are not it: that is still a move.
+	isWaiting = waiting("notes")
+	if got := neighbourInRing(items, s["api"], true, isWaiting); got != s["notes"] {
+		t.Errorf("single waiting session should be reachable, got %v", idOf(got))
+	}
+	// Nothing waiting: nil, and the caller says so.
+	if got := neighbourInRing(items, s["api"], true, waiting()); got != nil {
+		t.Errorf("nothing waiting should be nil, got %v", idOf(got))
+	}
+	// Parked red is skipped here too.
+	s["notes"].Flag = session.FlagParkedRed
+	if got := neighbourInRing(items, s["api"], true, waiting("notes")); got != nil {
+		t.Errorf("a parked-red waiting session is still skipped, got %v", idOf(got))
 	}
 }
 

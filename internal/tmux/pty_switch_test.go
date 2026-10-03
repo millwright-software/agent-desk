@@ -30,8 +30,10 @@ func TestSwitchForBytes(t *testing.T) {
 		// Other modifiers are not ours. Ctrl+Right is word-motion in most shells.
 		{"ctrl+right", []byte("\x1b[1;5C"), SwitchNone},
 		{"alt+right", []byte("\x1b[1;3C"), SwitchNone},
-		{"shift+up is not a switch", []byte("\x1b[1;2A"), SwitchNone},
-		{"shift+down is not a switch", []byte("\x1b[1;2B"), SwitchNone},
+		{"shift+down walks the waiting ring", []byte("\x1b[1;2B"), SwitchNextWaiting},
+		{"shift+up walks the waiting ring backwards", []byte("\x1b[1;2A"), SwitchPrevWaiting},
+		{"ctrl+down is not ours", []byte("\x1b[1;5B"), SwitchNone},
+		{"plain down arrow", []byte("\x1b[B"), SwitchNone},
 
 		// Ctrl+Q keeps its own single-byte path; it must not match here.
 		{"ctrl+q", []byte{0x11}, SwitchNone},

@@ -68,10 +68,23 @@ func StartAttachPTY(cmd *exec.Cmd, tty *os.File) (*os.File, error) {
 type SwitchDirection int
 
 const (
-	SwitchNone SwitchDirection = iota
-	SwitchNext
-	SwitchPrev
+	SwitchNone        SwitchDirection = iota
+	SwitchNext                        // Shift+Right: next live session
+	SwitchPrev                        // Shift+Left: previous live session
+	SwitchNextWaiting                 // Shift+Down: next session waiting on you
+	SwitchPrevWaiting                 // Shift+Up: previous session waiting on you
 )
+
+// Waiting reports whether the direction walks only sessions that need you
+// (Shift+Up / Shift+Down) rather than every live one.
+func (d SwitchDirection) Waiting() bool {
+	return d == SwitchNextWaiting || d == SwitchPrevWaiting
+}
+
+// Forward reports whether the direction moves down the list.
+func (d SwitchDirection) Forward() bool {
+	return d == SwitchNext || d == SwitchNextWaiting
+}
 
 // ⚠️ SHIFT+ARROWS, NOT SHIFT+BRACKETS. In a terminal Shift+] IS "}" and
 // Shift+[ IS "{" — they are the ASCII bytes 0x7D/0x7B, not distinct keys.
@@ -86,6 +99,8 @@ const (
 var (
 	seqShiftRight = []byte{0x1b, '[', '1', ';', '2', 'C'}
 	seqShiftLeft  = []byte{0x1b, '[', '1', ';', '2', 'D'}
+	seqShiftUp    = []byte{0x1b, '[', '1', ';', '2', 'A'}
+	seqShiftDown  = []byte{0x1b, '[', '1', ';', '2', 'B'}
 )
 
 // switchForBytes decides whether one raw stdin read is a switch request.
@@ -99,6 +114,10 @@ func switchForBytes(b []byte) SwitchDirection {
 		return SwitchNext
 	case bytes.Equal(b, seqShiftLeft):
 		return SwitchPrev
+	case bytes.Equal(b, seqShiftDown):
+		return SwitchNextWaiting
+	case bytes.Equal(b, seqShiftUp):
+		return SwitchPrevWaiting
 	}
 	return SwitchNone
 }
