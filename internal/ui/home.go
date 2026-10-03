@@ -5103,7 +5103,14 @@ skipSave:
 	// On return, immediately update all session statuses (don't reload from storage
 	// which would lose the tmux session state)
 	switchTo := new(tmux.SwitchDirection)
-	return tea.Exec(attachCmd{session: tmuxSess, switchTo: switchTo, banner: banner}, func(err error) tea.Msg {
+	// Asked by the attach loop before it detaches for Shift+Up / Shift+Down.
+	// Runs on the proxy's stdin goroutine while the TUI is suspended in
+	// tea.Exec, so flatItems is not being rebuilt underneath it; the status
+	// read is the thread-safe one.
+	canSwitch := func(dir tmux.SwitchDirection) bool {
+		return h.neighbourWaitingSession(inst, dir.Forward()) != nil
+	}
+	return tea.Exec(attachCmd{session: tmuxSess, switchTo: switchTo, banner: banner, canSwitch: canSwitch}, func(err error) tea.Msg {
 		// CRITICAL: Set isAttaching to false BEFORE returning the message
 		// This prevents a race condition where View() could be called with
 		// isAttaching=true before Update() processes statusUpdateMsg,
@@ -5255,9 +5262,10 @@ func neighbourInRing(items []session.Item, from *session.Instance, forward bool,
 // tea.Exec takes the command by value — a plain field would be written on a
 // copy and the switch would vanish between Run() and the callback.
 type attachCmd struct {
-	session  *tmux.Session
-	switchTo *tmux.SwitchDirection
-	banner   *tmux.AttachBanner // landing card, nil for none
+	session   *tmux.Session
+	switchTo  *tmux.SwitchDirection
+	banner    *tmux.AttachBanner              // landing card, nil for none
+	canSwitch func(tmux.SwitchDirection) bool // asked before a Shift+Up/Down detach
 }
 
 func (a attachCmd) Run() error {
@@ -5265,7 +5273,7 @@ func (a attachCmd) Run() error {
 	// Removing clear screen here prevents double-clearing which corrupts terminal state
 
 	ctx := context.Background()
-	dir, err := a.session.AttachSwitchable(ctx, a.banner)
+	dir, err := a.session.AttachSwitchable(ctx, a.banner, a.canSwitch)
 	if a.switchTo != nil {
 		*a.switchTo = dir
 	}

@@ -11,6 +11,14 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-10-02
+
+### Changed
+- **`Shift+Up` / `Shift+Down` with nothing waiting now stay in the session and flash a "Nothing waiting" card**
+  instead of dropping you to the sidebar. The attach loop asks whether there is anywhere to go before it
+  detaches; if not, the key is swallowed and the card shows for a second (or until the next keystroke), same
+  mechanics as the landing card.
+
 ## [1.0.15] - 2026-10-02
 
 ### Added
