@@ -2682,6 +2682,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// has fully torn down by the time this message is delivered.
 		h.isAttaching.Store(false)
 		if msg.target == nil {
+			if msg.notice != "" {
+				h.maintenanceMsg = msg.notice + " — Esc to dismiss"
+				h.maintenanceMsgTime = time.Now()
+			}
+			h.triggerStatusUpdate()
 			return h, nil
 		}
 		// Move the cursor first, so the sidebar is already on the new session
@@ -5119,7 +5124,14 @@ skipSave:
 		// Shift+Right / Shift+Left inside the attach: move to the next or
 		// previous LIVE session instead of returning to the sidebar.
 		if *switchTo != tmux.SwitchNone {
-			if next := h.neighbourLiveSession(inst, *switchTo == tmux.SwitchNext); next != nil {
+			if switchTo.Waiting() {
+				// Shift+Down / Shift+Up: only sessions that need you.
+				if next := h.neighbourWaitingSession(inst, switchTo.Forward()); next != nil {
+					return switchSessionMsg{target: next}
+				}
+				return switchSessionMsg{notice: "No session is waiting for you"}
+			}
+			if next := h.neighbourLiveSession(inst, switchTo.Forward()); next != nil {
 				return switchSessionMsg{target: next}
 			}
 			// Only one live session (or none but this): nothing to switch to.
@@ -5138,6 +5150,9 @@ skipSave:
 // live PTY. Going through Update lets the first attach finish tearing down.
 type switchSessionMsg struct {
 	target *session.Instance
+	// notice is shown in the sidebar when there is no target, so a key that
+	// found nothing to switch to does not look like a key that did nothing.
+	notice string
 }
 
 // neighbourLiveSession returns the session before or after `from` in sidebar
@@ -5155,6 +5170,17 @@ func (h *Home) neighbourLiveSession(from *session.Instance, forward bool) *sessi
 	})
 }
 
+// neighbourWaitingSession is the Shift+Down / Shift+Up ring: the next or
+// previous session in sidebar order that is WAITING on you, i.e. Claude asked
+// a question or wants a permission. The session you are leaving is almost
+// never a candidate itself (attaching acknowledged it), so the walk starts
+// from its position in the list rather than from its place in the ring.
+func (h *Home) neighbourWaitingSession(from *session.Instance, forward bool) *session.Instance {
+	return neighbourInRing(h.flatItems, from, forward, func(i *session.Instance) bool {
+		return i.GetStatusThreadSafe() == session.StatusWaiting && i.Exists()
+	})
+}
+
 // neighbourInRing is the ring walk itself, with liveness injected.
 //
 // ⚠️ Split out from neighbourLiveSession so it can be TESTED. Instance.Exists()
@@ -5169,10 +5195,15 @@ func (h *Home) neighbourLiveSession(from *session.Instance, forward bool) *sessi
 // still works, and clears the marker.)
 func neighbourInRing(items []session.Item, from *session.Instance, forward bool, isLive func(*session.Instance) bool) *session.Instance {
 	var live []*session.Instance
+	var livePos []int // position of each candidate in items, for the fallback below
 	idx := -1
-	for _, item := range items {
+	fromPos := -1
+	for pos, item := range items {
 		if item.Type != session.ItemTypeSession || item.Session == nil {
 			continue
+		}
+		if item.Session == from {
+			fromPos = pos
 		}
 		if item.Session.Flag == session.FlagParkedRed {
 			continue
@@ -5184,19 +5215,38 @@ func neighbourInRing(items []session.Item, from *session.Instance, forward bool,
 			idx = len(live)
 		}
 		live = append(live, item.Session)
+		livePos = append(livePos, pos)
 	}
-	if len(live) < 2 {
+	if idx >= 0 {
+		if len(live) < 2 {
+			return nil
+		}
+		if forward {
+			return live[(idx+1)%len(live)]
+		}
+		return live[(idx-1+len(live))%len(live)]
+	}
+	// The session we came from is not a candidate: it died while attached,
+	// or this is the waiting ring and attaching acknowledged it. Walk from
+	// its POSITION in the list, so "down" really is the next one below and
+	// "up" the next one above, wrapping at the ends.
+	if len(live) == 0 {
 		return nil
 	}
-	if idx == -1 {
-		// The session we came from is no longer live (its command exited while
-		// attached). Landing on the first live one still beats doing nothing.
+	if forward {
+		for i, pos := range livePos {
+			if pos > fromPos {
+				return live[i]
+			}
+		}
 		return live[0]
 	}
-	if forward {
-		return live[(idx+1)%len(live)]
+	for i := len(livePos) - 1; i >= 0; i-- {
+		if livePos[i] < fromPos {
+			return live[i]
+		}
 	}
-	return live[(idx-1+len(live))%len(live)]
+	return live[len(live)-1]
 }
 
 // attachCmd implements tea.ExecCommand for custom PTY attach

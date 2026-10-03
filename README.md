@@ -54,6 +54,7 @@ agent-desk add . -c claude        # add the current dir as a Claude session
 |-----|--------|
 | `Enter` | Attach to session |
 | `Shift+←` / `Shift+→` | Previous / next live session, while attached |
+| `Shift+↑` / `Shift+↓` | Previous / next session waiting for you, while attached |
 | `Ctrl+Q` | Detach back to the list |
 | `n` · `d` | New session · delete |
 | `g` · `G` | New group · new top-level group |
