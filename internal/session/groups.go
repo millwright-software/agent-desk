@@ -12,6 +12,11 @@ const DefaultGroupName = "My Sessions"
 // DefaultGroupPath is the normalized path for the default group (used for lookups and protection)
 const DefaultGroupPath = "my-sessions"
 
+// SnoozedGroupPath is the system group snoozed sessions sit in. It is created
+// on first snooze, pinned to the bottom of the list, and removed again when
+// its last session wakes or is cancelled.
+const SnoozedGroupPath = "Snoozed"
+
 // ItemType represents the type of item in the flattened list
 type ItemType int
 
@@ -191,6 +196,11 @@ func (t *GroupTree) rebuildGroupList() {
 		}
 		if strings.HasPrefix(pathI, pathJ+"/") {
 			return false // j is parent of i
+		}
+
+		// The Snoozed group (and anything under it) always sorts last.
+		if si, sj := getRootPath(pathI) == SnoozedGroupPath, getRootPath(pathJ) == SnoozedGroupPath; si != sj {
+			return sj
 		}
 
 		// Get parent paths for comparison

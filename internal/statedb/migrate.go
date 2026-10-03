@@ -80,6 +80,7 @@ type toolDataBlob struct {
 	Flag               int             `json:"flag,omitempty"`
 	LastLogActivity    int64           `json:"last_log_activity,omitempty"`
 	SnoozeUntil        int64           `json:"snooze_until,omitempty"`
+	SnoozeFromGroup    string          `json:"snooze_from_group,omitempty"`
 	// Parked is a legacy bool (superseded by Flag); still read for migration.
 	Parked bool `json:"parked,omitempty"`
 }
@@ -184,7 +185,7 @@ func MarshalToolData(
 	codexSessionID string, codexDetectedAt time.Time,
 	loadedMCPNames []string,
 	toolOptionsJSON json.RawMessage, colorScheme string, flag int, lastLogActivity int64,
-	snoozeUntil int64,
+	snoozeUntil int64, snoozeFromGroup string,
 ) json.RawMessage {
 	td := toolDataBlob{
 		ClaudeSessionID:   claudeSessionID,
@@ -200,6 +201,7 @@ func MarshalToolData(
 		Flag:              flag,
 		LastLogActivity:   lastLogActivity,
 		SnoozeUntil:       snoozeUntil,
+		SnoozeFromGroup:   snoozeFromGroup,
 	}
 	if !claudeDetectedAt.IsZero() {
 		td.ClaudeDetectedAt = claudeDetectedAt.Unix()
@@ -227,7 +229,7 @@ func UnmarshalToolData(data json.RawMessage) (
 	codexSessionID string, codexDetectedAt time.Time,
 	loadedMCPNames []string,
 	toolOptionsJSON json.RawMessage, colorScheme string, flag int, lastLogActivity int64,
-	snoozeUntil int64,
+	snoozeUntil int64, snoozeFromGroup string,
 ) {
 	if len(data) == 0 {
 		return
@@ -261,6 +263,7 @@ func UnmarshalToolData(data json.RawMessage) (
 	flag = td.Flag
 	lastLogActivity = td.LastLogActivity
 	snoozeUntil = td.SnoozeUntil
+	snoozeFromGroup = td.SnoozeFromGroup
 	// Legacy migration: an old row stored parked as a bool. Map it to the
 	// parked-red flag value (2 == session.FlagParkedRed) when no flag is set.
 	if flag == 0 && td.Parked {

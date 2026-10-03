@@ -2636,8 +2636,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		inst := h.instanceByID[msg.instanceID]
 		h.instancesMu.RUnlock()
 		if inst != nil {
-			inst.Snooze(msg.until)
-			h.forceSaveInstances()
+			h.snoozeSession(inst, msg.until)
 		}
 		return h, nil
 
@@ -3060,7 +3059,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Wake due snoozes: flag flips to unread, group stays put. Cheap and
 		// in-memory, so it runs every tick regardless of the activity gates
 		// below.
-		if h.wakeDueSnoozes(time.Time(msg)) {
+		if woken := h.wakeDueSnoozes(time.Time(msg)); len(woken) > 0 {
+			for _, inst := range woken {
+				h.returnFromSnooze(inst)
+			}
+			h.rebuildFlatItems()
 			h.saveInstances()
 		}
 
@@ -4109,9 +4112,15 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
 				inst := item.Session
+				wasSnoozed := inst.Flag == session.FlagSnoozed
 				inst.Flag = inst.Flag.Next()
-				// u on a snoozed session cancels the snooze (Next lands on none).
-				inst.SnoozeUntil = time.Time{}
+				// u on a snoozed session cancels the snooze (Next lands on
+				// none) and sends it back to its group.
+				if wasSnoozed {
+					inst.SnoozeUntil = time.Time{}
+					h.returnFromSnooze(inst)
+					h.rebuildFlatItems()
+				}
 				// Setting any marker mutes the session's auto-attention so the
 				// bookmark stays quiet; the dot color is the only signal.
 				if inst.Flag.IsSet() {
@@ -4591,19 +4600,62 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // saveInstances saves instances to storage
+// snoozeIcon is the row marker for a snoozed session: a clock when it wakes
+// today, a calendar when later.
+func snoozeIcon(until, now time.Time) string {
+	if session.SnoozeWakesToday(until, now) {
+		return "⏰"
+	}
+	return "📅"
+}
+
+// snoozeSession parks a session until the wake time and moves it to the
+// Snoozed group at the bottom of the list, remembering where it came from.
+// Re-snoozing an already snoozed session keeps the original home group.
+func (h *Home) snoozeSession(inst *session.Instance, until time.Time) {
+	if inst.Flag != session.FlagSnoozed || inst.SnoozeFromGroup == "" {
+		inst.SnoozeFromGroup = inst.GroupPath
+	}
+	inst.Snooze(until)
+	if inst.GroupPath != session.SnoozedGroupPath {
+		h.groupTree.MoveSessionToGroup(inst, session.SnoozedGroupPath)
+	}
+	h.rebuildFlatItems()
+	h.forceSaveInstances()
+}
+
+// returnFromSnooze sends a woken or cancelled session back to the group it
+// was snoozed from, if it is still sitting in Snoozed (a manual move out of
+// Snoozed is respected), and removes the Snoozed group once it is empty. The
+// caller rebuilds the flat list and saves.
+func (h *Home) returnFromSnooze(inst *session.Instance) {
+	from := inst.SnoozeFromGroup
+	inst.SnoozeFromGroup = ""
+	if inst.GroupPath == session.SnoozedGroupPath {
+		if from == "" || from == session.SnoozedGroupPath {
+			from = session.DefaultGroupPath
+		}
+		h.groupTree.MoveSessionToGroup(inst, from)
+	}
+	if g, ok := h.groupTree.Groups[session.SnoozedGroupPath]; ok && len(g.Sessions) == 0 {
+		h.groupTree.DeleteGroup(session.SnoozedGroupPath)
+	}
+}
+
 // wakeDueSnoozes flips every snoozed session whose wake time has passed to
-// the unread bookmark. Returns true if anything changed.
-func (h *Home) wakeDueSnoozes(now time.Time) bool {
+// the unread bookmark and returns them, so the caller can move each back to
+// its group outside the instances lock.
+func (h *Home) wakeDueSnoozes(now time.Time) []*session.Instance {
 	h.instancesMu.RLock()
 	defer h.instancesMu.RUnlock()
-	changed := false
+	var woken []*session.Instance
 	for _, inst := range h.instances {
 		if inst.SnoozeDue(now) {
 			inst.WakeFromSnooze()
-			changed = true
+			woken = append(woken, inst)
 		}
 	}
-	return changed
+	return woken
 }
 
 func (h *Home) saveInstances() {
@@ -5117,8 +5169,13 @@ func (h *Home) attachSessionWithBanner(inst *session.Instance, banner *tmux.Atta
 	// Interacting with a session clears any manual u-key marker (unread/parked):
 	// opening it means you've dealt with it, so the overlay is now stale. The
 	// SaveWithGroups below persists the cleared flag.
+	if inst.Flag == session.FlagSnoozed {
+		// Opening a snoozed session cancels the snooze: back to its group.
+		inst.SnoozeUntil = time.Time{}
+		h.returnFromSnooze(inst)
+		h.rebuildFlatItems()
+	}
 	inst.Flag = session.FlagNone
-	inst.SnoozeUntil = time.Time{}
 
 	// Skip saving during reload to avoid overwriting external changes
 	// THREAD-SAFE: Read isReloading under mutex
@@ -6910,10 +6967,12 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		statusStyle = SessionStatusParkedBlue
 		titleStyle = SessionTitleParkedBlue
 	case session.FlagSnoozed:
-		// Snoozed: looks parked red, plus the wake time after the title
-		statusIcon = "●"
-		statusStyle = SessionStatusParked
-		titleStyle = SessionTitleParkedRed
+		// Snoozed: a clock if it wakes today, a calendar if later; dim title,
+		// wake time after the name. The emoji is two cells wide, so the
+		// separator after it is dropped below to keep titles aligned.
+		statusIcon = snoozeIcon(inst.SnoozeUntil, time.Now())
+		statusStyle = lipgloss.NewStyle()
+		titleStyle = SessionTitleSnoozed
 	}
 
 	// Selection indicator. We deliberately do NOT restyle the status dot here:
@@ -6934,16 +6993,20 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 	}
 
 	status := statusStyle.Render(statusIcon)
+	statusSep := " "
+	if lipgloss.Width(statusIcon) > 1 {
+		statusSep = ""
+	}
 	title := titleStyle.Render(inst.Title)
 
-	// Snooze badge: when the session wakes ("zz Mon 7a")
+	// Snooze badge: when the session wakes ("Mon 7a")
 	snoozeBadge := ""
 	if inst.Flag == session.FlagSnoozed && !inst.SnoozeUntil.IsZero() {
 		szStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
 		if selected {
 			szStyle = SessionStatusSelStyle
 		}
-		snoozeBadge = szStyle.Render(" zz " + session.FormatSnoozeUntil(inst.SnoozeUntil, time.Now()))
+		snoozeBadge = szStyle.Render(" " + session.FormatSnoozeUntil(inst.SnoozeUntil, time.Now()))
 	}
 
 	// Worktree branch badge for sessions running in git worktrees
@@ -7001,7 +7064,7 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 	}
 
 	// Build row: [baseIndent][selection][tree][status] [swatch][title] [worktree][model][staleness]
-	row := fmt.Sprintf("%s%s%s %s %s%s%s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, colorSwatch, title, snoozeBadge, worktreeBadge, modelBadge, staleness)
+	row := fmt.Sprintf("%s%s%s %s%s%s%s%s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, statusSep, colorSwatch, title, snoozeBadge, worktreeBadge, modelBadge, staleness)
 	b.WriteString(row)
 	b.WriteString("\n")
 }
