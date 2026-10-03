@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/millwright-software/agent-desk/internal/tmux"
 )
 
 // TestNewSessionStatusFlicker tests for green flicker on new session creation
@@ -1710,6 +1712,71 @@ func TestInstance_HookFastPath(t *testing.T) {
 	}
 	if !fresh {
 		t.Error("GetHookStatus() should report fresh for recent update")
+	}
+}
+
+// A permission prompt or AskUserQuestion dialog blocks Claude until it is
+// answered, so it is waiting whether or not the session was acknowledged.
+// Stop keeps the acknowledgment rule: looked at it → gray.
+func TestStatusForHookWaiting_PromptOutranksAcknowledged(t *testing.T) {
+	tests := []struct {
+		event string
+		ack   bool
+		want  Status
+	}{
+		{"Stop", false, StatusWaiting},
+		{"Stop", true, StatusIdle},
+		{"SessionStart", true, StatusIdle},
+		{"PermissionRequest", false, StatusWaiting},
+		{"PermissionRequest", true, StatusWaiting}, // the bug: this used to be idle
+		{"Notification", true, StatusWaiting},
+		{"", true, StatusIdle}, // no event recorded (older status file): old behaviour
+	}
+	for _, tt := range tests {
+		t.Run(tt.event+"/ack="+map[bool]string{true: "y", false: "n"}[tt.ack], func(t *testing.T) {
+			if got := statusForHookWaiting(tt.event, tt.ack); got != tt.want {
+				t.Errorf("statusForHookWaiting(%q, %v) = %q, want %q", tt.event, tt.ack, got, tt.want)
+			}
+		})
+	}
+}
+
+// A new prompt clears the acknowledgment once — not on every tick that
+// re-applies the same hook status, which would keep moving waitingSince.
+func TestInstance_UpdateHookStatus_PromptResetsAcknowledgedOnce(t *testing.T) {
+	inst := NewInstanceWithTool("hook-prompt-test", "/tmp/test", "claude")
+	inst.tmuxSession = tmux.NewSession("agentdesk_hook_prompt_test", "/tmp/test")
+	inst.tmuxSession.Acknowledge()
+	if !inst.tmuxSession.IsAcknowledged() {
+		t.Fatal("precondition: acknowledged")
+	}
+
+	at := time.Now()
+	prompt := &HookStatus{Status: "waiting", Event: "PermissionRequest", UpdatedAt: at}
+	inst.UpdateHookStatus(prompt)
+	if inst.tmuxSession.IsAcknowledged() {
+		t.Error("a new prompt should clear the acknowledgment")
+	}
+	if inst.hookEvent != "PermissionRequest" {
+		t.Errorf("hookEvent = %q", inst.hookEvent)
+	}
+
+	// Attach (acknowledge), then the watcher re-applies the SAME status.
+	inst.tmuxSession.Acknowledge()
+	inst.UpdateHookStatus(prompt)
+	if !inst.tmuxSession.IsAcknowledged() {
+		t.Error("re-applying the same prompt event must not reset again")
+	}
+
+	// A Stop does not touch acknowledgment either.
+	inst.UpdateHookStatus(&HookStatus{Status: "waiting", Event: "Stop", UpdatedAt: at.Add(time.Second)})
+	if !inst.tmuxSession.IsAcknowledged() {
+		t.Error("Stop must not reset the acknowledgment")
+	}
+
+	inst.ClearHookStatus()
+	if inst.hookEvent != "" {
+		t.Errorf("ClearHookStatus should clear hookEvent, got %q", inst.hookEvent)
 	}
 }
 

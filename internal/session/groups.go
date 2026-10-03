@@ -336,6 +336,18 @@ func GetGroupLevel(path string) int {
 
 // Flatten returns a flat list of items for cursor navigation
 func (t *GroupTree) Flatten() []Item {
+	return t.flatten(false)
+}
+
+// FlattenAll is Flatten as if every group were expanded: the same order, with
+// the sessions of collapsed groups included. For walks that must not depend
+// on how the sidebar happens to be folded — a session waiting for you is
+// still waiting inside a collapsed group.
+func (t *GroupTree) FlattenAll() []Item {
+	return t.flatten(true)
+}
+
+func (t *GroupTree) flatten(all bool) []Item {
 	items := []Item{}
 
 	for _, group := range t.GroupList {
@@ -356,7 +368,7 @@ func (t *GroupTree) Flatten() []Item {
 				continue // Malformed path, skip
 			}
 			parentPath := group.Path[:idx]
-			if parentGroup, exists := t.Groups[parentPath]; exists && !parentGroup.Expanded {
+			if parentGroup, exists := t.Groups[parentPath]; exists && !parentGroup.Expanded && !all {
 				continue // Parent is collapsed, skip this subgroup
 			}
 		}
@@ -370,7 +382,7 @@ func (t *GroupTree) Flatten() []Item {
 		})
 
 		// Add sessions if expanded
-		if group.Expanded {
+		if all || group.Expanded {
 			// Separate parent sessions from sub-sessions
 			parentSessions := []*Instance{}
 			subSessionsByParent := make(map[string][]*Instance) // parentID -> sub-sessions

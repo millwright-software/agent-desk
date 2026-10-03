@@ -43,6 +43,7 @@ var hookEventConfigs = []struct {
 	{Event: "UserPromptSubmit"},
 	{Event: "Stop"},
 	{Event: "PermissionRequest"},
+	{Event: "PostToolUse"}, // ends a PermissionRequest: approved or answered, tool ran, Claude is going again
 	{Event: "Notification", Matcher: "permission_prompt|elicitation_dialog"},
 	{Event: "SessionEnd"},
 }

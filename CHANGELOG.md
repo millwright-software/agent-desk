@@ -11,6 +11,24 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-10-03
+
+### Fixed
+- **A session sitting on a question or permission prompt is "waiting" even if you had opened it before.**
+  `Shift+Up` / `Shift+Down` walked straight past a session with an AskUserQuestion dialog on screen, and the
+  sidebar showed it gray. Cause: the acknowledgment rule ("you attached, so it is seen") was applied to every
+  hook "waiting", and a prompt arrives as the same "waiting" as a finished turn. A prompt blocks Claude until you
+  answer it, so it now stays waiting regardless of acknowledgment, and a new prompt clears the acknowledgment
+  (once, not every tick) so the eventual Stop reads as unseen too. `PermissionRequest` and the matched
+  `Notification` events count as prompts; `Stop` keeps the old rule.
+- **`PostToolUse` hook added (status "running").** It is what ends a prompt: you approved or answered, the tool
+  ran, Claude is going again. Without it nothing fired until Stop, so an answered question read as waiting for
+  the rest of the turn. Existing installs pick it up at the next launch (hooks are re-installed when any are
+  missing and you had accepted them) or with `agent-desk hooks install`.
+- **`Shift+Up` / `Shift+Down` reach sessions inside collapsed groups.** A session waiting for you is still
+  waiting when its group is folded. Landing on one expands the group so the cursor has a row to return to.
+  `Shift+Left` / `Shift+Right` still follow the sidebar as shown.
+
 ## [1.0.17] - 2026-10-03
 
 ### Fixed
