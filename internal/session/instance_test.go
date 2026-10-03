@@ -1933,3 +1933,55 @@ func TestNewInstanceNormalizesProjectPath(t *testing.T) {
 		t.Errorf("NewInstanceWithTool stored %q, want %q", got, "/Users/test/proj")
 	}
 }
+
+// TestShouldSyncFromDiskOnRestart_DeadPaneKeepsStoredID covers the 2026-10-03
+// incident: tmux server killed, several instances sharing one project path,
+// Restart rescanned the project dir and adopted sibling instances' sessions.
+// With no live pane, a stored ID that has conversation data must be kept.
+func TestShouldSyncFromDiskOnRestart_DeadPaneKeepsStoredID(t *testing.T) {
+	configDir := t.TempDir()
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		} else {
+			os.Unsetenv("CLAUDE_CONFIG_DIR")
+		}
+	}()
+
+	projectPath := "/Users/test/deadpane-project"
+	projectDir := filepath.Join(configDir, "projects", ConvertToClaudeDirName(projectPath))
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	storedID := "33333333-3333-3333-3333-333333333333"
+	zombieID := "44444444-4444-4444-4444-444444444444"
+	if err := os.WriteFile(filepath.Join(projectDir, storedID+".jsonl"),
+		[]byte(`{"sessionId":"`+storedID+`","type":"progress"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, zombieID+".jsonl"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No tmux session at all (the server was killed): stored ID with data wins.
+	inst := NewInstanceWithTool("deadpane", projectPath, "claude")
+	inst.ClaudeSessionID = storedID
+	if inst.shouldSyncFromDiskOnRestart() {
+		t.Error("dead pane + stored ID with data: must not rescan the project dir")
+	}
+
+	// Nothing stored: the scan is the only way to learn an ID.
+	inst.ClaudeSessionID = ""
+	if !inst.shouldSyncFromDiskOnRestart() {
+		t.Error("empty stored ID: must rescan")
+	}
+
+	// Stored ID is a zombie file: nothing to protect, rescan allowed.
+	inst.ClaudeSessionID = zombieID
+	if !inst.shouldSyncFromDiskOnRestart() {
+		t.Error("stored ID with no conversation data: must rescan")
+	}
+}
