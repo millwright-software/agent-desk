@@ -1781,6 +1781,26 @@ func (i *Instance) collectOtherClaudeSessionIDs() map[string]bool {
 	return exclude
 }
 
+// shouldSyncFromDiskOnRestart decides whether Restart may rescan the project's
+// session files before resuming. A /clear can only have happened inside a live
+// pane, so the rescan is only meaningful while the tmux session still exists.
+// When it is gone (tmux server killed, reboot) the stored ID is authoritative:
+// the scan picks the most recently modified .jsonl in the project directory,
+// and with several instances sharing one project path and no live tmux envs
+// to exclude, that is a sibling instance's session. On 2026-10-03 that
+// rewired three vault instances to three other instances' conversations.
+// The stored ID still yields to the scan when it is empty or points at a file
+// with no conversation data (nothing to protect).
+func (i *Instance) shouldSyncFromDiskOnRestart() bool {
+	if i.tmuxSession != nil && i.tmuxSession.Exists() {
+		return true
+	}
+	if i.ClaudeSessionID == "" {
+		return true
+	}
+	return !sessionHasConversationData(i.ClaudeSessionID, i.ProjectPath)
+}
+
 // syncClaudeSessionFromDisk scans the filesystem for the most recent session file,
 // excluding IDs owned by other agent-desk instances. If a different (newer) session
 // is found, it updates ClaudeSessionID, ClaudeDetectedAt, and the tmux env var.
@@ -2654,9 +2674,17 @@ func (i *Instance) Restart() error {
 		mcpLog.Debug("mcp_regen_skipped", slog.String("reason", "flag_set_by_apply"))
 	}
 
-	// Sync Claude session from disk before restart to pick up /clear session changes
+	// Sync Claude session from disk before restart to pick up /clear session changes.
+	// Only while the pane is alive: see shouldSyncFromDiskOnRestart.
 	if i.Tool == "claude" {
-		i.syncClaudeSessionFromDisk()
+		if i.shouldSyncFromDiskOnRestart() {
+			i.syncClaudeSessionFromDisk()
+		} else {
+			sessionLog.Debug("claude_session_sync_skipped_dead_pane",
+				slog.String("current_id", i.ClaudeSessionID),
+				slog.String("reason", "stored_id_has_data_and_tmux_session_gone"),
+			)
+		}
 	}
 
 	// If Claude session with known ID AND tmux session exists, use respawn-pane

@@ -11,6 +11,17 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-10-03
+
+### Fixed
+- **Resuming a session after the tmux server died no longer adopts a sibling instance's conversation.**
+  Restart rescanned the project directory for the most recently modified transcript so a `/clear` inside a
+  live pane would be picked up. With the server gone there were no live panes to exclude, so instances that
+  share a project path each resumed whichever sibling's transcript had been touched last (three vault
+  instances came back inside three other instances' conversations on 2026-10-03). The rescan now only runs
+  while the pane still exists; with it gone, a stored session ID whose transcript has conversation data is
+  kept. Empty or zombie IDs still rescan. Record: `documentation/worklog/2026-10-03-restart-stole-sibling-sessions.md`.
+
 ## [1.0.16] - 2026-10-02
 
 ### Changed
