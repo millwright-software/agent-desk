@@ -2690,12 +2690,21 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h, nil
 		}
 		// Move the cursor first, so the sidebar is already on the new session
-		// when the next detach returns to it.
-		for i, item := range h.flatItems {
-			if item.Type == session.ItemTypeSession && item.Session == msg.target {
-				h.cursor = i
-				break
+		// when the next detach returns to it. The waiting ring can land inside
+		// a collapsed group; expand it so the cursor has a row to sit on.
+		cursorTo := func() bool {
+			for i, item := range h.flatItems {
+				if item.Type == session.ItemTypeSession && item.Session == msg.target {
+					h.cursor = i
+					return true
+				}
 			}
+			return false
+		}
+		if !cursorTo() && msg.target.GroupPath != "" && h.groupTree != nil {
+			h.groupTree.ExpandGroupWithParents(msg.target.GroupPath)
+			h.rebuildFlatItems()
+			cursorTo()
 		}
 		return h, h.attachSessionWithBanner(msg.target, landingBanner(msg.target))
 
@@ -5182,8 +5191,11 @@ func (h *Home) neighbourLiveSession(from *session.Instance, forward bool) *sessi
 // a question or wants a permission. The session you are leaving is almost
 // never a candidate itself (attaching acknowledged it), so the walk starts
 // from its position in the list rather than from its place in the ring.
+//
+// ⚠️ Walks FlattenAll, not h.flatItems: a session waiting inside a collapsed
+// group is still waiting for you. The landing code expands the group.
 func (h *Home) neighbourWaitingSession(from *session.Instance, forward bool) *session.Instance {
-	return neighbourInRing(h.flatItems, from, forward, func(i *session.Instance) bool {
+	return neighbourInRing(h.groupTree.FlattenAll(), from, forward, func(i *session.Instance) bool {
 		return i.GetStatusThreadSafe() == session.StatusWaiting && i.Exists()
 	})
 }

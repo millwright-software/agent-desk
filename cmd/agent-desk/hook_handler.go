@@ -42,7 +42,13 @@ func mapEventToStatus(event string) string {
 	case "Stop":
 		return "waiting" // Claude finished, back at prompt waiting for user
 	case "PermissionRequest":
-		return "waiting" // Claude needs permission approval
+		return "waiting" // Claude needs permission approval, or asked a question (AskUserQuestion)
+	case "PostToolUse":
+		// A tool just ran, so Claude is going again. This is what ends a
+		// PermissionRequest: you approved, or answered the question, and the
+		// tool completed. Without it nothing fires until Stop, and the session
+		// would read as waiting for the whole rest of the turn.
+		return "running"
 	case "Notification":
 		// Notification events with permission_prompt|elicitation_dialog matcher
 		// are mapped to "waiting" by the caller after checking the matcher.

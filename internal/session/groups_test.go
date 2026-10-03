@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -174,6 +175,37 @@ func TestFlattenWithCollapsedGroup(t *testing.T) {
 	// Should have 1 group only (sessions hidden)
 	if len(items) != 1 {
 		t.Errorf("Expected 1 item (collapsed group), got %d", len(items))
+	}
+}
+
+// FlattenAll ignores folding: the sessions of a collapsed group, and of a
+// subgroup under a collapsed parent, are there in sidebar order.
+func TestFlattenAllIncludesCollapsedGroups(t *testing.T) {
+	tree := NewGroupTree([]*Instance{})
+	tree.CreateGroup("Parent")
+	tree.CreateSubgroup("parent", "Child")
+	tree.CreateGroup("Other")
+	tree.Groups["parent"].Sessions = []*Instance{{ID: "1", GroupPath: "parent"}}
+	tree.Groups["parent/child"].Sessions = []*Instance{{ID: "2", GroupPath: "parent/child"}}
+	tree.Groups["other"].Sessions = []*Instance{{ID: "3", GroupPath: "other"}}
+	tree.CollapseGroup("parent")
+	tree.CollapseGroup("other")
+
+	if n := len(tree.Flatten()); n != 2 {
+		t.Fatalf("Flatten with both collapsed: want 2 group rows, got %d", n)
+	}
+	var ids []string
+	for _, it := range tree.FlattenAll() {
+		if it.Type == ItemTypeSession {
+			ids = append(ids, it.Session.ID)
+		}
+	}
+	if got := strings.Join(ids, ","); got != "1,2,3" {
+		t.Errorf("FlattenAll sessions = %q, want 1,2,3", got)
+	}
+	// And folding state is untouched.
+	if tree.Groups["parent"].Expanded || tree.Groups["other"].Expanded {
+		t.Error("FlattenAll must not expand anything")
 	}
 }
 

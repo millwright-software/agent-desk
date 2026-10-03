@@ -122,6 +122,7 @@ type Instance struct {
 
 	// Hook-based status detection (set by StatusFileWatcher from Claude Code hooks)
 	hookStatus     string    // running, idle, waiting, dead (empty = no hook data)
+	hookEvent      string    // the Claude Code hook event behind hookStatus (Stop, PermissionRequest, ...)
 	hookSessionID  string    // Session ID from hook payload
 	hookLastUpdate time.Time // When hook status was last received
 
@@ -1622,14 +1623,15 @@ func (i *Instance) UpdateStatus() error {
 				i.tmuxSession.ResetAcknowledged()
 			}
 		case "waiting":
-			// Check acknowledgment: orange (waiting) vs gray (idle)
-			// Acknowledge() is called when user attaches to a session.
-			// ResetAcknowledged() is called by u key or when new activity occurs.
-			if i.tmuxSession != nil && i.tmuxSession.IsAcknowledged() {
-				i.Status = StatusIdle
-			} else {
-				i.Status = StatusWaiting
-			}
+			// ⚠️ A PROMPT IS NOT "SEEN AND DEALT WITH". Acknowledgment exists for
+			// Stop: Claude finished, you looked, it goes gray. A permission
+			// prompt or a question dialog (PermissionRequest, Notification
+			// with permission_prompt / elicitation_dialog) blocks Claude until
+			// you answer it, so it stays waiting whether or not you have
+			// attached since — until the next event says Claude moved on.
+			// Before this, a session you had opened once sat gray with a
+			// question on screen, and Shift+Up / Shift+Down walked past it.
+			i.Status = statusForHookWaiting(i.hookEvent, i.tmuxSession != nil && i.tmuxSession.IsAcknowledged())
 		case "dead":
 			i.Status = StatusError
 		}
@@ -1868,7 +1870,18 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	// A NEW prompt is new activity you have not seen: clear the acknowledgment
+	// so the session reads as needing you, and so that once you answer and
+	// Claude stops again, the result is orange rather than inheriting a stale
+	// "seen" from before the prompt. Only on the first sight of this event —
+	// the watcher re-applies the same HookStatus every tick, and resetting
+	// each time would move waitingSince and break "waiting longest first".
+	if HookEventIsPrompt(status.Event) && !status.UpdatedAt.Equal(i.hookLastUpdate) && i.tmuxSession != nil {
+		i.tmuxSession.ResetAcknowledged()
+	}
+
 	i.hookStatus = status.Status
+	i.hookEvent = status.Event
 	i.hookLastUpdate = status.UpdatedAt
 
 	// Sync session ID from hook if provided and different
@@ -1893,6 +1906,31 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 	}
 }
 
+// HookEventIsPrompt reports whether a Claude Code hook event means Claude is
+// BLOCKED on the user — a permission prompt or an AskUserQuestion dialog —
+// as opposed to merely resting at the prompt after a turn (Stop).
+func HookEventIsPrompt(event string) bool {
+	switch event {
+	case "PermissionRequest", "Notification":
+		return true
+	}
+	return false
+}
+
+// statusForHookWaiting decides what a hook "waiting" means on screen. After
+// Stop it is orange (waiting) until you have looked, then gray (idle) by
+// acknowledgment: Acknowledge() on attach, ResetAcknowledged() on the u key
+// or new activity. A prompt is waiting regardless — see HookEventIsPrompt.
+func statusForHookWaiting(event string, acknowledged bool) Status {
+	if HookEventIsPrompt(event) {
+		return StatusWaiting
+	}
+	if acknowledged {
+		return StatusIdle
+	}
+	return StatusWaiting
+}
+
 // GetHookStatus returns the current hook-based status and its freshness.
 // Returns empty string if no hook data or data is stale (>5s old).
 func (i *Instance) GetHookStatus() (string, bool) {
@@ -1913,6 +1951,7 @@ func (i *Instance) ClearHookStatus() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.hookStatus = ""
+	i.hookEvent = ""
 	i.hookLastUpdate = time.Time{}
 }
 

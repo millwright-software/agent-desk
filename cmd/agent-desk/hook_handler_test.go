@@ -17,6 +17,7 @@ func TestMapEventToStatus(t *testing.T) {
 		{"UserPromptSubmit", "running"},
 		{"Stop", "waiting"},
 		{"PermissionRequest", "waiting"},
+		{"PostToolUse", "running"},
 		{"Notification", ""},
 		{"SessionEnd", "dead"},
 		{"UnknownEvent", ""},
