@@ -221,8 +221,9 @@ type Home struct {
 	lastCachePrune time.Time
 
 	// Hook-based status detection (Claude Code lifecycle hooks)
-	hookWatcher        *session.StatusFileWatcher
-	pendingHooksPrompt bool // True if user should be prompted to install hooks
+	hookWatcher        *session.HookInbox
+	hookPrunedAt       time.Time // last inbox prune; rows for deleted instances go after a day
+	pendingHooksPrompt bool      // True if user should be prompted to install hooks
 
 	// File watcher for external changes (auto-reload)
 	storageWatcher *StorageWatcher
@@ -684,7 +685,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 
 		if alreadyInstalled {
 			// Hooks already present: start watcher, no prompt needed
-			hookWatcher, err := session.NewStatusFileWatcher(nil)
+			hookWatcher, err := session.NewHookInbox()
 			if err != nil {
 				uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
 			} else {
@@ -704,7 +705,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 						} else {
 							uiLog.Info("claude_hooks_reinstalled", slog.String("config_dir", configDir))
 						}
-						hookWatcher, err := session.NewStatusFileWatcher(nil)
+						hookWatcher, err := session.NewHookInbox()
 						if err != nil {
 							uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
 						} else {
@@ -1713,14 +1714,24 @@ func (h *Home) backgroundStatusUpdate() {
 		}
 	}
 
-	// Feed hook statuses from watcher to instances (enables hook fast path in UpdateStatus)
+	// Feed hook statuses from the inbox table to instances (enables hook fast
+	// path in UpdateStatus). One read of the table per tick.
 	if h.hookWatcher != nil {
+		h.hookWatcher.Refresh()
 		for _, inst := range instances {
 			if inst.Tool == "claude" {
 				if hs := h.hookWatcher.GetHookStatus(inst.ID); hs != nil {
 					inst.UpdateHookStatus(hs)
 				}
 			}
+		}
+		if time.Since(h.hookPrunedAt) > time.Hour {
+			live := make(map[string]bool, len(instances))
+			for _, inst := range instances {
+				live[inst.ID] = true
+			}
+			h.hookWatcher.Prune(live)
+			h.hookPrunedAt = time.Now()
 		}
 	}
 
@@ -4313,7 +4324,7 @@ func (h *Home) handleConfirmDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				uiLog.Info("claude_hooks_installed", slog.String("config_dir", configDir))
 			}
 			// Start the status file watcher
-			hookWatcher, err := session.NewStatusFileWatcher(nil)
+			hookWatcher, err := session.NewHookInbox()
 			if err != nil {
 				uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
 			} else {

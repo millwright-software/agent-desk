@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/millwright-software/agent-desk/internal/session"
+	"github.com/millwright-software/agent-desk/internal/statedb"
 )
 
 // hookPayload represents the JSON payload Claude Code sends to hooks via stdin.
@@ -102,6 +103,22 @@ func handleHookHandler() {
 		return
 	}
 
+	now := time.Now()
+
+	// The inbox table is the real destination (see statedb.HookInbox). The
+	// per-instance file below is only the fallback if the table cannot be
+	// opened or written, so a TUI from before the inbox still sees something.
+	if inbox, err := statedb.OpenHookInbox(session.HookInboxPath()); err == nil {
+		werr := inbox.Record(statedb.HookEvent{
+			InstanceID: instanceID, Status: status, Event: payload.HookEventName,
+			SessionID: payload.SessionID, At: now,
+		})
+		_ = inbox.Close()
+		if werr == nil {
+			return
+		}
+	}
+
 	// Ensure hooks directory exists
 	hooksDir := getHooksDir()
 	if err := os.MkdirAll(hooksDir, 0755); err != nil {
@@ -113,7 +130,7 @@ func handleHookHandler() {
 		Status:    status,
 		SessionID: payload.SessionID,
 		Event:     payload.HookEventName,
-		Timestamp: time.Now().Unix(),
+		Timestamp: now.Unix(),
 	}
 
 	jsonData, err := json.Marshal(statusFile)
@@ -141,6 +158,12 @@ func getHooksDir() string {
 
 // cleanStaleHookFiles removes hook status files older than 24 hours.
 func cleanStaleHookFiles() {
+	if inbox, err := statedb.OpenHookInbox(session.HookInboxPath()); err == nil {
+		if n, err := inbox.Count(); err == nil {
+			fmt.Printf("Hook events: %d instances (in %s)\n", n, session.HookInboxPath())
+		}
+		_ = inbox.Close()
+	}
 	hooksDir := getHooksDir()
 	entries, err := os.ReadDir(hooksDir)
 	if err != nil {
@@ -228,6 +251,12 @@ func handleHooksStatus() {
 	}
 
 	// Show hook status files
+	if inbox, err := statedb.OpenHookInbox(session.HookInboxPath()); err == nil {
+		if n, err := inbox.Count(); err == nil {
+			fmt.Printf("Hook events: %d instances (in %s)\n", n, session.HookInboxPath())
+		}
+		_ = inbox.Close()
+	}
 	hooksDir := getHooksDir()
 	entries, err := os.ReadDir(hooksDir)
 	if err != nil {
