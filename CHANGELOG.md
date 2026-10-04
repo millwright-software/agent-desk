@@ -11,6 +11,8 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-10-03
+
 ### Added
 - **Snooze a session (`s`).** Moves it into a "Snoozed" group pinned at the bottom of the list until a
   wake time, then returns it to the group it came from as the unread bookmark (green, "come back to
