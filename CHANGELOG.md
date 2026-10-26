@@ -11,6 +11,21 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.24] - 2026-10-26
+
+### Fixed
+- **Copilot conversations survive a reboot** (#1). Copilot sessions are bound to a persisted conversation
+  UUID instead of a context-relative `copilot --continue`. A new managed launch assigns its ID before
+  starting, with a pending state saved so an interrupted first launch is not stranded; a live-pane respawn
+  or a tmux server lost to a reboot resumes the same conversation and keeps the new tmux name across
+  reloads. Older entries recover through a searchable conversation picker (`Shift+R`, or `Enter` when the
+  tmux session is gone), and `agent-desk session set <entry> copilot-session-id <uuid>` binds one from the
+  CLI. Custom commands keep their flags; nothing in Copilot's own history is deleted. See
+  `docs/copilot-recovery.md`.
+- **Legacy Copilot entries mislabeled as Claude or shell** (#2). The launch executable now decides the tool,
+  so entries saved by older releases as `shell`, or reclassified as Claude from a Claude model banner, load
+  as Copilot and take the recovery path above. A changed tool clears the stale detection cache.
+
 ## [1.0.23] - 2026-10-21
 
 ### Changed
