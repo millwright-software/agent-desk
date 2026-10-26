@@ -176,6 +176,7 @@ type Home struct {
 	statusFilter   session.Status // Filter sessions by status ("" = all, or specific status)
 	sortMode       sortMode       // Order of sessions within each group (o key)
 	listRowWidth   int            // width of the session list, set per render (right-aligned columns)
+	colW           colWidths      // right-edge column widths, fitted to the list per render
 	previewMode    PreviewMode    // What to show in preview pane (both, output-only, analytics-only)
 	err            error
 	errTime        time.Time  // When error occurred (for auto-dismiss)
@@ -4687,12 +4688,99 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // saveInstances saves instances to storage
-// Column widths for the session row's right edge (cells).
+// Column widths for the session row's right edge (cells): the most any row
+// can need. The list sizes each column to its widest visible value instead
+// (fitColumns), so these are only the caps and the fallback.
 const (
 	colModelW = 3 // "o⚡": model family letter + the two-cell auto bolt
 	colTurnsW = 3 // "12", "·" when none
 	colAgeW   = 3 // "40m", "5h", "3d", "2w", "3w+": never more than three
 )
+
+// colWidths is the width of each right-edge column for one render.
+type colWidths struct{ model, turns, age int }
+
+func (c colWidths) total() int {
+	n := c.model + c.turns + c.age
+	for _, w := range []int{c.model, c.turns, c.age} {
+		if w > 0 {
+			n++
+		}
+	}
+	if n > 0 {
+		n-- // separators sit between columns, not after the last
+	}
+	return n
+}
+
+var defaultColWidths = colWidths{colModelW, colTurnsW, colAgeW}
+
+const modelBolt = "⚡"
+
+// columnCells is one row's column text, unpadded.
+type columnCells struct {
+	family, turns, age, wake string
+	auto                     bool
+}
+
+func rowColumnCells(inst *session.Instance, now time.Time) columnCells {
+	c := columnCells{age: columnAge(inst.GetLastActivityTime(), now)}
+	if inst.Flag == session.FlagSnoozed && !inst.SnoozeUntil.IsZero() {
+		c.wake = session.FormatSnoozeUntil(inst.SnoozeUntil, now)
+		return c
+	}
+	c.auto = inst.IsAutoMode()
+	c.family = inst.ModelFamily()
+	room := colModelW
+	if c.auto {
+		room -= lipgloss.Width(modelBolt)
+	}
+	if lipgloss.Width(c.family) > room {
+		c.family = truncateToWidth(c.family, room, "")
+	}
+	c.turns = "·"
+	if n := inst.RecentTurns(); n > 0 {
+		c.turns = fmt.Sprintf("%d", min(n, 999))
+	}
+	return c
+}
+
+func (c columnCells) modelWidth() int {
+	w := lipgloss.Width(c.family)
+	if c.auto {
+		w += lipgloss.Width(modelBolt)
+	}
+	return w
+}
+
+// fitColumns sizes each column to the widest value among the listed sessions,
+// so a list with no auto sessions and single-digit turns doesn't hold blank
+// cells against the titles. A snoozed row's wake time spans all three; if it
+// is wider than the rest, the turns column takes up the difference.
+func fitColumns(items []session.Item, now time.Time) colWidths {
+	var w colWidths
+	wake := 0
+	for _, it := range items {
+		if it.Type != session.ItemTypeSession || it.Session == nil {
+			continue
+		}
+		c := rowColumnCells(it.Session, now)
+		if c.wake != "" {
+			wake = max(wake, lipgloss.Width(c.wake))
+			continue
+		}
+		w.model = max(w.model, c.modelWidth())
+		w.turns = max(w.turns, lipgloss.Width(c.turns))
+		w.age = max(w.age, lipgloss.Width(c.age))
+	}
+	if wake > 0 && w.total() < wake {
+		if w.turns == 0 {
+			w.turns = 1
+		}
+		w.turns += wake - w.total()
+	}
+	return w
+}
 
 // columnAge is a coarse age, three characters at most: 1m–59m, 1h–23h,
 // 1d–6d, 1w–2w, then 3w+ for three weeks or more. The exact time stays in the
@@ -4737,10 +4825,10 @@ func padLeftW(s string, w int) string {
 	return s
 }
 
-// sessionColumns renders the fixed-width right edge of a session row: model
-// family letter + ⚡ (left-aligned), turns in the last 24h, age. Snoozed rows
-// show the wake time across all three instead; for a sleeping session that is
-// the number that matters.
+// sessionColumns renders the right edge of a session row: model family
+// letter + ⚡ (left-aligned), turns in the last 24h, age, each sized by
+// fitColumns so every row lines up. Snoozed rows show the wake time across all
+// three instead; for a sleeping session that is the number that matters.
 func (h *Home) sessionColumns(inst *session.Instance, selected bool) string {
 	dim := lipgloss.NewStyle().Foreground(ColorTextDim)
 	mdStyle := lipgloss.NewStyle().Foreground(ColorPurple)
@@ -4748,44 +4836,35 @@ func (h *Home) sessionColumns(inst *session.Instance, selected bool) string {
 	if selected {
 		dim, mdStyle, autoStyle = SessionStatusSelStyle, SessionStatusSelStyle, SessionStatusSelStyle
 	}
-	now := time.Now()
-	age := padLeftW(columnAge(inst.GetLastActivityTime(), now), colAgeW)
+	cw := h.colW
+	if cw == (colWidths{}) {
+		cw = defaultColWidths
+	}
+	c := rowColumnCells(inst, time.Now())
 
-	if inst.Flag == session.FlagSnoozed && !inst.SnoozeUntil.IsZero() {
-		span := colModelW + 1 + colTurnsW + 1 + colAgeW
-		wake := truncateToWidth(session.FormatSnoozeUntil(inst.SnoozeUntil, now), span, "")
-		return dim.Render(padLeftW(wake, span))
+	if c.wake != "" {
+		span := cw.total()
+		return dim.Render(padLeftW(truncateToWidth(c.wake, span, ""), span))
 	}
 
-	const bolt = "⚡"
-	auto := inst.IsAutoMode()
-	room := colModelW
-	if auto {
-		room -= lipgloss.Width(bolt)
-	}
-	name := inst.ModelFamily()
-	if lipgloss.Width(name) > room {
-		name = truncateToWidth(name, room, "")
-	}
-	model := ""
-	if name != "" {
-		model = mdStyle.Render(name)
-	}
-	used := lipgloss.Width(name)
-	if auto {
-		model += autoStyle.Render(bolt)
-		used += lipgloss.Width(bolt)
-	}
-	model += strings.Repeat(" ", max(0, colModelW-used))
-
-	turns := "·"
-	if n := inst.RecentTurns(); n > 0 {
-		turns = fmt.Sprintf("%d", n)
-		if n > 999 {
-			turns = "999"
+	var parts []string
+	if cw.model > 0 {
+		model := ""
+		if c.family != "" {
+			model = mdStyle.Render(c.family)
 		}
+		if c.auto {
+			model += autoStyle.Render(modelBolt)
+		}
+		parts = append(parts, model+strings.Repeat(" ", max(0, cw.model-c.modelWidth())))
 	}
-	return model + " " + dim.Render(padLeftW(turns, colTurnsW)) + " " + dim.Render(age)
+	if cw.turns > 0 {
+		parts = append(parts, dim.Render(padLeftW(c.turns, cw.turns)))
+	}
+	if cw.age > 0 {
+		parts = append(parts, dim.Render(padLeftW(c.age, cw.age)))
+	}
+	return strings.Join(parts, " ")
 }
 
 // sortKey is the group-tree ordering for the current sort mode, nil for
@@ -7014,6 +7093,7 @@ func (h *Home) helpKey(key, desc string) string {
 func (h *Home) renderSessionList(width, height int) string {
 	var b strings.Builder
 	h.listRowWidth = width
+	h.colW = fitColumns(h.flatItems, time.Now())
 
 	if len(h.flatItems) == 0 {
 		// Responsive empty state - adapts to available space

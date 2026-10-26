@@ -102,3 +102,36 @@ func TestColumnAge(t *testing.T) {
 		}
 	}
 }
+
+// Columns shrink to the widest value in the list: no auto session and no
+// turns leaves "o · 5d" (model 1, turns 1, age 2), not the 11-cell cap.
+func TestFitColumnsShrinksToList(t *testing.T) {
+	now := time.Now()
+	a := &session.Instance{ID: "a", Tool: "claude", ClaudeModel: "claude-opus-5-5"}
+	a.CreatedAt = now.Add(-5 * 24 * time.Hour)
+	items := []session.Item{{Type: session.ItemTypeSession, Session: a}}
+	got := fitColumns(items, now)
+	if want := (colWidths{model: 1, turns: 1, age: 2}); got != want {
+		t.Fatalf("got %+v want %+v", got, want)
+	}
+	h := &Home{colW: got}
+	if w := lipgloss.Width(h.sessionColumns(a, false)); w != got.total() {
+		t.Errorf("row width %d, want %d", w, got.total())
+	}
+
+	// A snoozed row's wake time widens the block so it still fits.
+	s := &session.Instance{ID: "s", Tool: "claude", ClaudeModel: "claude-opus-5-5"}
+	s.Snooze(now.Add(72 * time.Hour))
+	items = append(items, session.Item{Type: session.ItemTypeSession, Session: s})
+	got = fitColumns(items, now)
+	wake := session.FormatSnoozeUntil(s.SnoozeUntil, now)
+	if got.total() < lipgloss.Width(wake) {
+		t.Errorf("total %d narrower than wake %q", got.total(), wake)
+	}
+	h.colW = got
+	for _, inst := range []*session.Instance{a, s} {
+		if w := lipgloss.Width(h.sessionColumns(inst, false)); w != got.total() {
+			t.Errorf("%s: width %d, want %d", inst.ID, w, got.total())
+		}
+	}
+}
