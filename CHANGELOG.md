@@ -11,6 +11,12 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.25] - 2026-10-26
+
+### Changed
+
+- The columns to the right of each session title (model, turns, age) are sized to the widest value in the list rather than a fixed 11 cells, so titles get the blank space back. With no auto-mode session the model column is one cell; single-digit turn counts take one.
+
 ## [1.0.24] - 2026-10-26
 
 ### Fixed
