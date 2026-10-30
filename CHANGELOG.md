@@ -11,6 +11,12 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-10-30
+
+### Changed
+
+- Snoozed sessions fold away inside their group: a `▸ N snoozed` row at the bottom of the group, showing the next wake time, replaces the dimmed rows. It is closed by default; `Enter`, `Tab` or `→` opens it, and `←` closes it. Open folds are remembered across restarts.
+
 ## [1.0.25] - 2026-10-26
 
 ### Changed

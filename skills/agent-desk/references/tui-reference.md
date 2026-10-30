@@ -106,8 +106,12 @@ Sessions idle two days or more render faded.
 
 ### Snooze a session (`s`)
 
-Parks the session in place until a wake time: it stays in its group, dimmed,
-sunk below that group's live sessions (soonest wake first), then brightens as
+Parks the session in place until a wake time: it stays in its group, inside
+the group's snooze fold, the `▸ N snoozed` row at the group's bottom with the
+next wake time at the right. The fold is closed by default; `Enter`, `Tab` or
+`→` on it opens it to list the snoozed sessions (soonest wake first), and `←`
+on the fold or a session in it closes it. Open folds are remembered across
+restarts. At its wake time the session leaves the fold as
 the unread bookmark (green, "come back to this") in its usual spot. The row shows ⏰ when it wakes today
 and 📅 when later, with the wake time after the name (`7p`, `Mon 7a`,
 `10/12 9a`). The picker opens on a text field: type a time (`30m`, `2h`,

@@ -24,6 +24,9 @@ type ItemType int
 const (
 	ItemTypeGroup ItemType = iota
 	ItemTypeSession
+	// ItemTypeSnoozeFold is the "N snoozed" row at the bottom of a group with
+	// snoozed sessions. Folded, it hides them; open, they sit under it.
+	ItemTypeSnoozeFold
 )
 
 // Item represents a single item in the flattened group tree view
@@ -38,6 +41,8 @@ type Item struct {
 	IsSubSession        bool   // True if this session has a parent session
 	IsLastSubSession    bool   // True if this is the last sub-session of its parent (for tree rendering)
 	ParentIsLastInGroup bool   // True if parent session is last top-level item (for tree line rendering)
+	SnoozedCount        int    // On a snooze fold row: how many sessions it holds
+	SnoozeFoldOpen      bool   // On a snooze fold row: whether its sessions are showing
 }
 
 // Group represents a group of sessions
@@ -60,6 +65,9 @@ type GroupTree struct {
 	// under their parent. nil = manual order. Never touches persisted Order.
 	SortKey  func(*Instance) int64
 	Expanded map[string]bool // Collapsed state persistence
+	// SnoozeOpen holds the group paths whose snooze fold is open. Folds are
+	// closed by default; the UI owns this and sets it before Flatten.
+	SnoozeOpen map[string]bool
 }
 
 // NewGroupTree creates a new group tree from instances
@@ -419,26 +427,32 @@ func (t *GroupTree) flatten(all bool) []Item {
 					return keys[parentSessions[a]] > keys[parentSessions[b]]
 				})
 			}
-			// Snoozed sessions sink below the live ones in their group, soonest
-			// wake first, whatever the sort: a snoozed section inside the group.
-			sort.SliceStable(parentSessions, func(a, b int) bool {
-				sa, sb := parentSessions[a].Flag == FlagSnoozed, parentSessions[b].Flag == FlagSnoozed
-				if sa != sb {
-					return sb
+			// Snoozed sessions leave the live list for the group's snooze fold,
+			// soonest wake first, whatever the sort.
+			live := parentSessions[:0:0]
+			var snoozed []*Instance
+			for _, s := range parentSessions {
+				if s.Flag == FlagSnoozed {
+					snoozed = append(snoozed, s)
+				} else {
+					live = append(live, s)
 				}
-				if sa {
-					return parentSessions[a].SnoozeUntil.Before(parentSessions[b].SnoozeUntil)
-				}
-				return false
+			}
+			parentSessions = live
+			sort.SliceStable(snoozed, func(a, b int) bool {
+				return snoozed[a].SnoozeUntil.Before(snoozed[b].SnoozeUntil)
 			})
 
 			// Count total top-level items (parent sessions + orphan sub-sessions whose parent is in different group)
 			// For determining IsLastInGroup, we need to know how many top-level items there are
 			topLevelCount := len(parentSessions)
+			if len(snoozed) > 0 {
+				topLevelCount++ // the fold row is the group's last line
+			}
 			for parentID, subs := range subSessionsByParent {
 				// Check if parent is in this group
 				parentInGroup := false
-				for _, p := range parentSessions {
+				for _, p := range append(parentSessions, snoozed...) {
 					if p.ID == parentID {
 						parentInGroup = true
 						break
@@ -490,6 +504,12 @@ func (t *GroupTree) flatten(all bool) []Item {
 
 				topLevelIndex++
 			}
+			// Sub-sessions of a snoozed parent travel into the fold with it.
+			snoozedSubs := make(map[string][]*Instance, len(snoozed))
+			for _, s := range snoozed {
+				snoozedSubs[s.ID] = subSessionsByParent[s.ID]
+				delete(subSessionsByParent, s.ID)
+			}
 
 			// Add any orphaned sub-sessions (parent not in this group)
 			for _, subs := range subSessionsByParent {
@@ -503,6 +523,39 @@ func (t *GroupTree) flatten(all bool) []Item {
 						IsLastInGroup: topLevelIndex == topLevelCount,
 						IsSubSession:  true, // Still a sub-session, just orphaned in this group
 					})
+				}
+			}
+
+			if len(snoozed) > 0 {
+				open := all || t.SnoozeOpen[group.Path]
+				items = append(items, Item{
+					Type:           ItemTypeSnoozeFold,
+					Group:          group,
+					Level:          groupLevel + 1,
+					Path:           group.Path,
+					IsLastInGroup:  true,
+					SnoozedCount:   len(snoozed),
+					SnoozeFoldOpen: open,
+				})
+				if open {
+					// Drawn as children of the fold row: one level in, with
+					// the fold's own last-line connector above them.
+					var inFold []*Instance
+					for _, s := range snoozed {
+						inFold = append(inFold, s)
+						inFold = append(inFold, snoozedSubs[s.ID]...)
+					}
+					for i, s := range inFold {
+						items = append(items, Item{
+							Type:                ItemTypeSession,
+							Session:             s,
+							Level:               groupLevel + 2,
+							Path:                group.Path,
+							IsSubSession:        true,
+							IsLastSubSession:    i == len(inFold)-1,
+							ParentIsLastInGroup: true,
+						})
+					}
 				}
 			}
 		}
