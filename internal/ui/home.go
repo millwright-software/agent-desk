@@ -170,14 +170,15 @@ type Home struct {
 	analyticsCacheTime     map[string]time.Time                       // TTL cache: sessionID -> cache timestamp
 
 	// State
-	cursor         int            // Selected item index in flatItems
-	viewOffset     int            // First visible item index (for scrolling)
-	isAttaching    atomic.Bool    // Prevents View() output during attach (fixes Bubble Tea Issue #431) - atomic for thread safety
-	statusFilter   session.Status // Filter sessions by status ("" = all, or specific status)
-	sortMode       sortMode       // Order of sessions within each group (o key)
-	listRowWidth   int            // width of the session list, set per render (right-aligned columns)
-	colW           colWidths      // right-edge column widths, fitted to the list per render
-	previewMode    PreviewMode    // What to show in preview pane (both, output-only, analytics-only)
+	cursor         int             // Selected item index in flatItems
+	viewOffset     int             // First visible item index (for scrolling)
+	isAttaching    atomic.Bool     // Prevents View() output during attach (fixes Bubble Tea Issue #431) - atomic for thread safety
+	statusFilter   session.Status  // Filter sessions by status ("" = all, or specific status)
+	sortMode       sortMode        // Order of sessions within each group (o key)
+	listRowWidth   int             // width of the session list, set per render (right-aligned columns)
+	colW           colWidths       // right-edge column widths, fitted to the list per render
+	snoozeOpen     map[string]bool // group paths whose snooze fold is open (closed by default)
+	previewMode    PreviewMode     // What to show in preview pane (both, output-only, analytics-only)
 	err            error
 	errTime        time.Time  // When error occurred (for auto-dismiss)
 	isReloading    bool       // Visual feedback during auto-reload
@@ -328,12 +329,13 @@ type reloadState struct {
 
 // uiState persists cursor, preview mode, and status filter across restarts
 type uiState struct {
-	CursorSessionID     string `json:"cursor_session_id,omitempty"`
-	CursorGroupPath     string `json:"cursor_group_path,omitempty"`
-	PreviewMode         int    `json:"preview_mode"`
-	StatusFilter        string `json:"status_filter,omitempty"`
-	SidebarWidthPercent int    `json:"sidebar_width_percent,omitempty"`
-	SortMode            string `json:"sort_mode,omitempty"`
+	CursorSessionID     string   `json:"cursor_session_id,omitempty"`
+	CursorGroupPath     string   `json:"cursor_group_path,omitempty"`
+	PreviewMode         int      `json:"preview_mode"`
+	StatusFilter        string   `json:"status_filter,omitempty"`
+	SidebarWidthPercent int      `json:"sidebar_width_percent,omitempty"`
+	SortMode            string   `json:"sort_mode,omitempty"`
+	SnoozeOpen          []string `json:"snooze_open,omitempty"`
 }
 
 // sortMode orders the sessions inside each group (the o key). Groups and
@@ -880,6 +882,7 @@ func (h *Home) restoreState(state reloadState) {
 // rebuildFlatItems rebuilds the flattened view from group tree
 func (h *Home) rebuildFlatItems() {
 	h.groupTree.SortKey = h.sortKey()
+	h.groupTree.SnoozeOpen = h.snoozeOpen
 	allItems := h.groupTree.Flatten()
 
 	// Apply status filter if active
@@ -3809,6 +3812,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					h.setError(fmt.Errorf("session not running and cannot be restarted"))
 				}
+			} else if item.Type == session.ItemTypeSnoozeFold {
+				h.setSnoozeFold(item.Path, !item.SnoozeFoldOpen)
 			} else if item.Type == session.ItemTypeGroup {
 				// Toggle group on enter
 				groupPath := item.Path
@@ -3829,7 +3834,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Expand/collapse group or expand if on session
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeGroup {
+			if item.Type == session.ItemTypeSnoozeFold {
+				h.setSnoozeFold(item.Path, !item.SnoozeFoldOpen)
+			} else if item.Type == session.ItemTypeGroup {
 				groupPath := item.Path
 				h.groupTree.ToggleGroup(groupPath)
 				h.rebuildFlatItems()
@@ -3849,6 +3856,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			collapsed := false
+			if h.snoozeOpen[item.Path] && (item.Type == session.ItemTypeSnoozeFold ||
+				(item.Type == session.ItemTypeSession && item.Session != nil && item.Session.Flag == session.FlagSnoozed)) {
+				// Inside an open snooze fold, left folds it first.
+				h.setSnoozeFold(item.Path, false)
+				return h, nil
+			}
 			if item.Type == session.ItemTypeGroup {
 				groupPath := item.Path
 				h.groupTree.CollapseGroup(groupPath)
@@ -3860,7 +3873,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				collapsed = true
-			} else if item.Type == session.ItemTypeSession {
+			} else if item.Type == session.ItemTypeSession || item.Type == session.ItemTypeSnoozeFold {
 				// Move cursor to parent group
 				h.groupTree.CollapseGroup(item.Path)
 				h.rebuildFlatItems()
@@ -4899,6 +4912,27 @@ func (h *Home) snoozeSession(inst *session.Instance, until time.Time) {
 	h.forceSaveInstances()
 }
 
+// setSnoozeFold opens or closes a group's snooze fold, leaves the cursor on
+// the fold row, and remembers the choice across restarts.
+func (h *Home) setSnoozeFold(groupPath string, open bool) {
+	if h.snoozeOpen == nil {
+		h.snoozeOpen = make(map[string]bool)
+	}
+	if open {
+		h.snoozeOpen[groupPath] = true
+	} else {
+		delete(h.snoozeOpen, groupPath)
+	}
+	h.rebuildFlatItems()
+	for i, fi := range h.flatItems {
+		if fi.Type == session.ItemTypeSnoozeFold && fi.Path == groupPath {
+			h.cursor = i
+			break
+		}
+	}
+	h.saveUIState()
+}
+
 // migrateLegacySnoozed sends every session left in the old global Snoozed
 // group (v1.0.21–1.0.22) back to its home group, still snoozed, and drops the
 // group. Returns true if anything moved.
@@ -5097,6 +5131,12 @@ func (h *Home) saveUIState() {
 		SidebarWidthPercent: h.sidebarWidthPercent,
 		SortMode:            h.sortMode.String(),
 	}
+	for path, open := range h.snoozeOpen {
+		if open {
+			state.SnoozeOpen = append(state.SnoozeOpen, path)
+		}
+	}
+	sort.Strings(state.SnoozeOpen)
 
 	// Capture cursor position
 	if h.cursor >= 0 && h.cursor < len(h.flatItems) {
@@ -5148,6 +5188,10 @@ func (h *Home) loadUIState() {
 	h.previewMode = PreviewMode(state.PreviewMode)
 	h.statusFilter = session.Status(state.StatusFilter)
 	h.sortMode = parseSortMode(state.SortMode)
+	h.snoozeOpen = make(map[string]bool, len(state.SnoozeOpen))
+	for _, path := range state.SnoozeOpen {
+		h.snoozeOpen[path] = true
+	}
 
 	// Apply sidebar width if valid
 	if state.SidebarWidthPercent >= 15 && state.SidebarWidthPercent <= 50 {
@@ -6852,7 +6896,7 @@ func (h *Home) renderHelpBarMinimal() string {
 		contextKeys = keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("i") + " " + keyStyle.Render("g")
 	} else if h.cursor < len(h.flatItems) {
 		item := h.flatItems[h.cursor]
-		if item.Type == session.ItemTypeGroup {
+		if item.Type != session.ItemTypeSession {
 			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("g")
 		} else {
 			contextKeys = keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("R")
@@ -6897,7 +6941,7 @@ func (h *Home) renderHelpBarCompact() string {
 		}
 	} else if h.cursor < len(h.flatItems) {
 		item := h.flatItems[h.cursor]
-		if item.Type == session.ItemTypeGroup {
+		if item.Type != session.ItemTypeSession {
 			contextHints = []string{
 				h.helpKeyShort("⏎", "Toggle"),
 				h.helpKeyShort("n/N", "New"),
@@ -6983,7 +7027,7 @@ func (h *Home) renderHelpBarFull() string {
 		}
 	} else if h.cursor < len(h.flatItems) {
 		item := h.flatItems[h.cursor]
-		if item.Type == session.ItemTypeGroup {
+		if item.Type != session.ItemTypeSession {
 			contextTitle = "Group"
 			primaryHints = []string{
 				h.helpKey("Tab", "Toggle"),
@@ -7158,6 +7202,8 @@ func (h *Home) renderSessionList(width, height int) string {
 func (h *Home) renderItem(b *strings.Builder, item session.Item, selected bool, itemIndex int) {
 	if item.Type == session.ItemTypeGroup {
 		h.renderGroupItem(b, item, selected, itemIndex)
+	} else if item.Type == session.ItemTypeSnoozeFold {
+		h.renderSnoozeFoldItem(b, item, selected)
 	} else {
 		h.renderSessionItem(b, item, selected)
 	}
@@ -7228,6 +7274,48 @@ const (
 
 // renderSessionItem renders a single session item for the left panel
 // PERFORMANCE: Uses cached styles from styles.go to avoid allocations
+// renderSnoozeFoldItem renders a group's "N snoozed" row: the last line of
+// the group, folded by default, with the soonest wake time at the right edge.
+func (h *Home) renderSnoozeFoldItem(b *strings.Builder, item session.Item, selected bool) {
+	treeStyle := TreeConnectorStyle
+	textStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+	iconStyle := GroupExpandStyle
+	selectionPrefix := " "
+	if selected {
+		treeStyle = TreeConnectorSelStyle
+		textStyle = SessionTitleSelStyle
+		iconStyle = GroupExpandSelStyle
+		selectionPrefix = SessionSelectionPrefix.Render("▶")
+	}
+	icon := "▸"
+	if item.SnoozeFoldOpen {
+		icon = "▾"
+	}
+	baseIndent := strings.Repeat(treeEmpty, max(0, item.Level-1))
+	left := baseIndent + selectionPrefix + treeStyle.Render(treeLast) + " " +
+		iconStyle.Render(icon) + " " + textStyle.Render(fmt.Sprintf("%d snoozed", item.SnoozedCount))
+
+	// Soonest wake in the group, right-aligned like the session columns.
+	var soonest time.Time
+	if item.Group != nil {
+		for _, s := range item.Group.Sessions {
+			if s.Flag == session.FlagSnoozed && !s.SnoozeUntil.IsZero() &&
+				(soonest.IsZero() || s.SnoozeUntil.Before(soonest)) {
+				soonest = s.SnoozeUntil
+			}
+		}
+	}
+	row := left
+	if !soonest.IsZero() && h.listRowWidth > 0 {
+		wake := "next " + session.FormatSnoozeUntil(soonest, time.Now())
+		if pad := h.listRowWidth - 1 - lipgloss.Width(left) - lipgloss.Width(wake); pad >= 1 {
+			row = left + strings.Repeat(" ", pad) + textStyle.Render(wake)
+		}
+	}
+	b.WriteString(row)
+	b.WriteString("\n")
+}
+
 func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected bool) {
 	inst := item.Session
 
@@ -7680,7 +7768,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	item := h.flatItems[h.cursor]
 
 	// If group is selected, show group info
-	if item.Type == session.ItemTypeGroup {
+	if item.Type == session.ItemTypeGroup || item.Type == session.ItemTypeSnoozeFold {
 		return h.renderGroupPreview(item.Group, width, height)
 	}
 

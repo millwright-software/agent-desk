@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -55,9 +56,10 @@ func TestWakeDueSnoozes(t *testing.T) {
 	}
 }
 
-// Snoozing is in place: the session keeps its group, sinks below the live
-// sessions in it (soonest wake first), and comes back to its manual spot on
-// wake. Sessions left in the legacy global Snoozed group go home on load.
+// Snoozing is in place: the session keeps its group, moves into the group's
+// snooze fold below the live sessions (soonest wake first), and comes back to
+// its manual spot on wake. Sessions left in the legacy global Snoozed group go
+// home on load. order() reads with every fold open (FlattenAll).
 func TestSnoozeInPlace(t *testing.T) {
 	a, b, c := inst("a"), inst("b"), inst("c")
 	for i, s := range []*session.Instance{a, b, c} {
@@ -67,7 +69,7 @@ func TestSnoozeInPlace(t *testing.T) {
 	h.groupTree = session.NewGroupTree(h.instances)
 	order := func() string {
 		out := ""
-		for _, it := range h.groupTree.Flatten() {
+		for _, it := range h.groupTree.FlattenAll() {
 			if it.Type == session.ItemTypeSession {
 				out += it.Session.ID
 			}
@@ -251,5 +253,57 @@ func TestSnoozeDialogPicks(t *testing.T) {
 	d, cmd = d.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil || d.IsVisible() {
 		t.Error("esc should close silently")
+	}
+}
+
+// A group's snoozed sessions sit in a fold row at its bottom, closed by
+// default; opening it lists them under it, and left closes it again.
+func TestSnoozeFold(t *testing.T) {
+	a, b, c := inst("a"), inst("b"), inst("c")
+	for i, s := range []*session.Instance{a, b, c} {
+		s.GroupPath, s.Order = "Legal", i
+	}
+	h := &Home{instances: []*session.Instance{a, b, c}}
+	h.groupTree = session.NewGroupTree(h.instances)
+	h.snoozeSession(a, time.Now().Add(48*time.Hour))
+	h.snoozeSession(b, time.Now().Add(2*time.Hour))
+
+	rows := func() string {
+		out := ""
+		for _, it := range h.flatItems {
+			switch it.Type {
+			case session.ItemTypeGroup:
+				out += "G"
+			case session.ItemTypeSnoozeFold:
+				out += fmt.Sprintf("[%d]", it.SnoozedCount)
+			case session.ItemTypeSession:
+				out += it.Session.ID
+			}
+		}
+		return out
+	}
+	if got := rows(); got != "Gc[2]" {
+		t.Fatalf("closed: %q, want Gc[2]", got)
+	}
+	fold := len(h.flatItems) - 1
+	if h.flatItems[fold-1].IsLastInGroup {
+		t.Error("the last live session must not draw as last: the fold is")
+	}
+	if !h.flatItems[fold].IsLastInGroup {
+		t.Error("fold row should be the group's last line")
+	}
+
+	h.cursor = fold
+	h.setSnoozeFold("Legal", true)
+	if got := rows(); got != "Gc[2]ba" {
+		t.Fatalf("open: %q, want Gc[2]ba", got)
+	}
+	if h.cursor != fold {
+		t.Errorf("cursor %d, want the fold row %d", h.cursor, fold)
+	}
+
+	h.setSnoozeFold("Legal", false)
+	if got := rows(); got != "Gc[2]" {
+		t.Errorf("closed again: %q", got)
 	}
 }
