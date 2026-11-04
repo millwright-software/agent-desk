@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/millwright-software/agent-desk/internal/session"
@@ -70,6 +73,16 @@ func handleHookHandler() {
 	if instanceID == "" {
 		// No instance ID means this Claude session isn't managed by agent-desk.
 		// Exit silently without error.
+		return
+	}
+
+	// A Claude Code background session (the daemon's bg-spare workers) can
+	// carry a pane's AGENTDESK_INSTANCE_ID (likely inherited from the pane
+	// that started it). Its events are not that pane's: on 11/3 one such
+	// session's conversation ID landed on L1-OC Counter, and the hook path swapped L1's stored
+	// conversation ID for the background one, so Shift+R would have resumed
+	// the wrong conversation. Drop events from anything under a bg worker.
+	if runningUnderClaudeBackground() {
 		return
 	}
 
@@ -290,4 +303,40 @@ func getClaudeConfigDirForHooks() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude")
+}
+
+// runningUnderClaudeBackground reports whether this hook process descends from
+// a Claude Code background worker (`claude bg-spare` / `bg-pty-host`). It walks
+// a few ancestors with ps; any failure reads as "not background", so a broken
+// ps never silences a real session's hooks.
+func runningUnderClaudeBackground() bool {
+	var cmds []string
+	pid := os.Getppid()
+	for i := 0; i < 8 && pid > 1; i++ {
+		out, err := exec.Command("ps", "-o", "ppid=,command=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			break
+		}
+		fields := strings.Fields(strings.TrimSpace(string(out)))
+		if len(fields) < 2 {
+			break
+		}
+		cmds = append(cmds, strings.Join(fields[1:], " "))
+		next, err := strconv.Atoi(fields[0])
+		if err != nil {
+			break
+		}
+		pid = next
+	}
+	return isClaudeBackgroundAncestry(cmds)
+}
+
+// isClaudeBackgroundAncestry is the pure check behind runningUnderClaudeBackground.
+func isClaudeBackgroundAncestry(cmds []string) bool {
+	for _, c := range cmds {
+		if strings.Contains(c, "--bg-spare") || strings.Contains(c, "bg-pty-host") {
+			return true
+		}
+	}
+	return false
 }

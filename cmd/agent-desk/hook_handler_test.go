@@ -210,3 +210,21 @@ func TestHookPayload_Unmarshal(t *testing.T) {
 		})
 	}
 }
+
+func TestIsClaudeBackgroundAncestry(t *testing.T) {
+	cases := []struct {
+		name string
+		cmds []string
+		want bool
+	}{
+		{"tmux pane session", []string{"claude --resume 3b4d7f17", "bash -c claude", "tmux"}, false},
+		{"bg spare worker", []string{"claude bg-spare --bg-spare /tmp/cc-daemon-501/x/spare/a.claim.sock"}, true},
+		{"under pty host", []string{"/bin/sh -c hook", "claude bg-pty-host --bg-pty-host /tmp/a.pty.sock 200 50 -- claude --bg-spare /tmp/a.claim.sock"}, true},
+		{"empty", nil, false},
+	}
+	for _, c := range cases {
+		if got := isClaudeBackgroundAncestry(c.cmds); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
