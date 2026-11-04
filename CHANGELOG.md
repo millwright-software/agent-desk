@@ -11,6 +11,12 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.27] - 2026-11-03
+
+### Fixed
+
+- Hook events from Claude Code background sessions are ignored. A background worker could carry an Agent Desk pane's `AGENTDESK_INSTANCE_ID`, and its events then overwrote that pane's stored conversation ID, so `Shift+R` would have resumed the wrong conversation (seen on 11/3: L1-OC Counter filed under a background session's ID).
+
 ## [1.0.26] - 2026-10-30
 
 ### Changed
