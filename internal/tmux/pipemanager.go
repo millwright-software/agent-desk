@@ -31,6 +31,7 @@ type PipeManager struct {
 	// probe is cached and debited per pipe, so a batch of connects costs one.
 	roomMu    sync.Mutex
 	room      ServerFiles
+	lastRoom  ServerFiles // the last reading a probe returned without error
 	roomAt    time.Time
 	roomErr   error
 	skipped   map[string]bool // sessions left without a pipe for lack of room
@@ -444,6 +445,7 @@ func (pm *PipeManager) takeRoom(sessionName string) error {
 		f, err := pm.probeRoom()
 		pm.room, pm.roomErr, pm.roomAt = f, err, time.Now()
 		if err == nil {
+			pm.lastRoom = f
 			pipeLog.Debug("tmux_server_files", slog.Int("limit", f.Limit), slog.Int("in_use", f.InUse), slog.Int("pipe_budget", f.PipeBudget()))
 		}
 	}
@@ -482,6 +484,17 @@ func (pm *PipeManager) Room() (ServerFiles, int) {
 	pm.roomMu.Lock()
 	defer pm.roomMu.Unlock()
 	return pm.room, len(pm.skipped)
+}
+
+// LastRoom is the last reading a probe returned without error. A server that
+// refuses clients cannot be probed, so Room goes blank exactly when the
+// banner most needs to know which class of server it is talking about; the
+// limit does not change while a server lives, so the last good one stands.
+// Zero when no probe has succeeded yet.
+func (pm *PipeManager) LastRoom() ServerFiles {
+	pm.roomMu.Lock()
+	defer pm.roomMu.Unlock()
+	return pm.lastRoom
 }
 
 // tmuxSessionExists checks if a tmux session exists (lightweight subprocess).
