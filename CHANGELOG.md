@@ -11,6 +11,10 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+### Fixed
+
+- The tmux open-file-limit banner now tells you to **restart the tmux server** when the server is on the old 256 default, instead of "Close an extra agent-desk window". Closing a window only frees descriptors for a moment on a server that stays capped, and assumes you have a second window to close; a server agent-desk started before v1.0.28 (or a plain `tmux` from a shell) keeps 256 until it exits, so a restart is the only thing that lifts the limit for good. A genuinely roomier server that is merely full still points you to close a window.
+
 ## [1.0.28] - 2026-11-11
 
 ### Fixed

@@ -1321,22 +1321,27 @@ func (h *Home) bannerMsg() string {
 // unexpectedly" while the agents keep running (issues #3, #4). Reads only
 // cached state, so it is cheap per tick.
 func tmuxServerWarning() string {
-	if since, full := tmux.ServerUnreachable(); full {
-		return fmt.Sprintf("tmux server is full (open-file limit) since %s: agents still running. Close an extra agent-desk window to free it",
-			since.Format("3:04pm"))
-	}
 	pm := tmux.GetPipeManager()
+	var room tmux.ServerFiles
+	skipped := 0
+	if pm != nil {
+		room, skipped = pm.Room()
+	}
+
+	if since, full := tmux.ServerUnreachable(); full {
+		return fmt.Sprintf("tmux server is full (open-file limit) since %s: agents still running. %s",
+			since.Format("3:04pm"), room.Relief())
+	}
 	if pm == nil {
 		return ""
 	}
-	room, skipped := pm.Room()
 	if skipped > 0 {
-		return fmt.Sprintf("tmux server near its open-file limit (%d of %d): %d session(s) without live status. Close an extra agent-desk window (Troubleshooting: tmux file limit)",
-			room.InUse, room.Limit, skipped)
+		return fmt.Sprintf("tmux server near its open-file limit (%d of %d): %d session(s) without live status. %s",
+			room.InUse, room.Limit, skipped, room.Relief())
 	}
 	if room.Low() && room.PipeBudget() < pm.ConnectedCount() {
-		return fmt.Sprintf("tmux server allows only %d open files (%d in use): another agent-desk window won't fit (Troubleshooting: tmux file limit)",
-			room.Limit, room.InUse)
+		return fmt.Sprintf("tmux server allows only %d open files (%d in use): %s",
+			room.Limit, room.InUse, room.Relief())
 	}
 	return ""
 }

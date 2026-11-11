@@ -46,6 +46,14 @@ func TestPipeBudget(t *testing.T) {
 	assert.False(t, ServerFiles{Limit: 16384}.Low())
 }
 
+// A low-limit (legacy) server is capped no matter how many windows close, so
+// its relief is to restart; a roomier server that is merely full frees up
+// when a window closes.
+func TestRelief(t *testing.T) {
+	assert.Contains(t, ServerFiles{Limit: 256, InUse: 200}.Relief(), "restart the tmux server")
+	assert.Contains(t, ServerFiles{Limit: 16384, InUse: 16000}.Relief(), "Close an extra agent-desk window")
+}
+
 // A server without room for another pipe gets none: Connect refuses before
 // spawning a client, and the session is counted as going without.
 func TestConnectRefusedWithoutServerRoom(t *testing.T) {
