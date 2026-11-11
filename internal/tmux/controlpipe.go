@@ -95,6 +95,7 @@ func NewControlPipe(sessionName string) (*ControlPipe, error) {
 	select {
 	case <-cp.ready:
 	case <-cp.done:
+		cp.Close() // reap the exited tmux -C, or it lingers as a zombie
 		return nil, fmt.Errorf("pipe died during handshake for session %s", sessionName)
 	case <-time.After(2 * time.Second):
 		// Timeout waiting for handshake, but pipe may still work

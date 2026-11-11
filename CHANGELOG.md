@@ -11,6 +11,16 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+## [1.0.28] - 2026-11-11
+
+### Fixed
+
+- **A fourth agent-desk window no longer takes the tmux server down for everyone** (#3, #4). The tmux server's open-file limit was the cause of both: each window keeps three of the server's files per session, and at the limit tmux refuses every new client with "server exited unexpectedly" while the agents keep running. Go hands child processes the macOS default soft limit of 256, so every tmux server agent-desk started had that cap. Agent-desk now sets its limit to 16384 before any tmux command, and a server it starts inherits that.
+- A window that would push an already-running low-limit server over no longer opens more control connections. It polls those sessions instead, and a banner says so. When the server is refusing clients, the banner says that too, instead of every session looking dead.
+- Pipe leaks: a pipe whose watcher gave up, or whose session ended, was dropped without closing its `tmux -C` client, which could stay attached holding three server files. A client that died during the handshake was never reaped.
+- Pipe reconnect never reconnected: the watcher marked the session as reconnecting, so its own `Connect` returned early and only the 20-second sweep restored the pipe.
+- The tmux, session and ui test suites run against a private tmux server instead of the user's default one with live agents on it.
+
 ## [1.0.27] - 2026-11-03
 
 ### Fixed

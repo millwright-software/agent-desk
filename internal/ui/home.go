@@ -299,6 +299,7 @@ type Home struct {
 	// Maintenance banner (shown after background maintenance completes)
 	maintenanceMsg     string
 	maintenanceMsgTime time.Time
+	tmuxWarning        string // tmux server full or near its open-file limit; shown in the banner slot
 
 	// Cursor sync: track last notification bar switch during attach
 	// When user switches sessions via Ctrl+b N while attached (tea.Exec),
@@ -969,7 +970,7 @@ func (h *Home) syncViewport() {
 		updateBannerHeight = 1
 	}
 	maintenanceBannerHeight := 0
-	if h.maintenanceMsg != "" {
+	if h.bannerMsg() != "" {
 		maintenanceBannerHeight = 1
 	}
 
@@ -1104,7 +1105,7 @@ func (h *Home) getVisibleHeight() int {
 		updateBannerHeight = 1
 	}
 	maintenanceBannerHeight := 0
-	if h.maintenanceMsg != "" {
+	if h.bannerMsg() != "" {
 		maintenanceBannerHeight = 1
 	}
 
@@ -1303,6 +1304,41 @@ func (h *Home) pruneAnalyticsCache() {
 
 	// Prune MCP info cache (entries older than 10 minutes)
 	session.PruneMCPCache(maxAge)
+}
+
+// bannerMsg is the one-line banner under the header: a tmux server warning
+// first (it explains why everything else looks dead), else maintenance.
+func (h *Home) bannerMsg() string {
+	if h.tmuxWarning != "" {
+		return h.tmuxWarning
+	}
+	return h.maintenanceMsg
+}
+
+// tmuxServerWarning says when the tmux server is refusing clients or close
+// to it. Each agent-desk window holds three of the server's descriptors per
+// session; at the limit every window's commands fail with "server exited
+// unexpectedly" while the agents keep running (issues #3, #4). Reads only
+// cached state, so it is cheap per tick.
+func tmuxServerWarning() string {
+	if since, full := tmux.ServerUnreachable(); full {
+		return fmt.Sprintf("tmux server is full (open-file limit) since %s: agents still running. Close an extra agent-desk window to free it",
+			since.Format("3:04pm"))
+	}
+	pm := tmux.GetPipeManager()
+	if pm == nil {
+		return ""
+	}
+	room, skipped := pm.Room()
+	if skipped > 0 {
+		return fmt.Sprintf("tmux server near its open-file limit (%d of %d): %d session(s) without live status. Close an extra agent-desk window (Troubleshooting: tmux file limit)",
+			room.InUse, room.Limit, skipped)
+	}
+	if room.Low() && room.PipeBudget() < pm.ConnectedCount() {
+		return fmt.Sprintf("tmux server allows only %d open files (%d in use): another agent-desk window won't fit (Troubleshooting: tmux file limit)",
+			room.Limit, room.InUse)
+	}
+	return ""
 }
 
 // setError sets an error with timestamp for auto-dismiss
@@ -3142,6 +3178,8 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.rebuildFlatItems()
 			h.saveInstances()
 		}
+
+		h.tmuxWarning = tmuxServerWarning()
 
 		// Auto-dismiss errors after 5 seconds
 		if h.err != nil && !h.errTime.IsZero() && time.Since(h.errTime) > 5*time.Second {
@@ -6109,15 +6147,19 @@ func (h *Home) View() string {
 	// MAINTENANCE BANNER (if maintenance completed recently)
 	// ═══════════════════════════════════════════════════════════════════
 	maintenanceBannerHeight := 0
-	if h.maintenanceMsg != "" {
+	if msg := h.bannerMsg(); msg != "" {
 		maintenanceBannerHeight = 1
+		bg := ColorCyan
+		if h.tmuxWarning != "" {
+			bg = ColorYellow
+		}
 		maintStyle := lipgloss.NewStyle().
 			Foreground(ColorBg).
-			Background(ColorCyan).
+			Background(bg).
 			Bold(true).
 			MaxWidth(h.width).
 			Align(lipgloss.Center)
-		b.WriteString(maintStyle.Render(" " + h.maintenanceMsg + " "))
+		b.WriteString(maintStyle.Render(" " + msg + " "))
 		b.WriteString("\n")
 	}
 

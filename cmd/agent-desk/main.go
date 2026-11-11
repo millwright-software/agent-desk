@@ -30,7 +30,7 @@ import (
 	"github.com/millwright-software/agent-desk/internal/update"
 )
 
-const Version = "1.0.27"
+const Version = "1.0.28"
 
 // Table column widths for list command output
 const (
@@ -182,6 +182,11 @@ func initColorProfile() {
 }
 
 func main() {
+	// Before any tmux command runs: a tmux server this process starts inherits
+	// this limit. Left alone, Go hands children the macOS default of 256, and a
+	// few agent-desk windows on twenty sessions fill that (issues #3, #4).
+	fileLimit, fileLimitErr := tmux.RaiseFileLimit()
+
 	// Extract global -p/--profile flag before subcommand dispatch
 	profile, args := extractProfileFlag(os.Args[1:])
 
@@ -379,6 +384,11 @@ func main() {
 		if debugMode {
 			logging.ForComponent(logging.CompUI).Info("instance_started",
 				slog.Int("pid", os.Getpid()))
+		}
+		if fileLimitErr != nil {
+			logging.ForComponent(logging.CompUI).Warn("raise_file_limit_failed", slog.String("error", fileLimitErr.Error()))
+		} else {
+			logging.ForComponent(logging.CompUI).Debug("file_limit", slog.Uint64("soft", fileLimit))
 		}
 
 		// SIGUSR1 dumps the ring buffer for post-mortem debugging
