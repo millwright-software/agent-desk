@@ -14,6 +14,16 @@ func TestMain(m *testing.M) {
 	// Force _test profile for all tests in this package
 	os.Setenv("AGENTDESK_PROFILE", "_test")
 
+	// Every tmux command goes to a private server, never the user's default
+	// one with live agents on it (see internal/tmux/testmain_test.go).
+	tmuxDir, err := os.MkdirTemp("/tmp", "adt")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("TMUX_TMPDIR", tmuxDir)
+	os.Unsetenv("TMUX")
+	os.Unsetenv("TMUX_PANE")
+
 	// Run tests
 	code := m.Run()
 
@@ -21,6 +31,8 @@ func TestMain(m *testing.M) {
 	// This prevents RAM waste from lingering test sessions
 	// See CLAUDE.md: "2026-01-20 Incident: 20+ Test-Skip-Regen sessions orphaned, wasting ~3GB RAM"
 	cleanupTestSessions()
+	_ = exec.Command("tmux", "kill-server").Run()
+	_ = os.RemoveAll(tmuxDir)
 
 	os.Exit(code)
 }

@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -25,6 +26,16 @@ type PipeManager struct {
 	reconnectMu  sync.Mutex
 	reconnecting map[string]bool
 
+	// Server room: a new pipe costs the tmux server pipeFDCost descriptors,
+	// and a server at its limit refuses every client from every window. The
+	// probe is cached and debited per pipe, so a batch of connects costs one.
+	roomMu    sync.Mutex
+	room      ServerFiles
+	roomAt    time.Time
+	roomErr   error
+	skipped   map[string]bool // sessions left without a pipe for lack of room
+	probeRoom func() (ServerFiles, error)
+
 	// Lifecycle
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -38,6 +49,8 @@ func NewPipeManager(ctx context.Context, onOutput func(sessionName string)) *Pip
 		pipes:        make(map[string]*ControlPipe),
 		onOutput:     onOutput,
 		reconnecting: make(map[string]bool),
+		skipped:      make(map[string]bool),
+		probeRoom:    ProbeServerFiles,
 		ctx:          childCtx,
 		cancel:       cancel,
 	}
@@ -59,6 +72,7 @@ func (pm *PipeManager) Connect(sessionName string) error {
 	if existing, ok := pm.pipes[sessionName]; ok {
 		existing.Close()
 		delete(pm.pipes, sessionName)
+		pm.giveRoom()
 	}
 	pm.mu.Unlock()
 
@@ -77,9 +91,14 @@ func (pm *PipeManager) Connect(sessionName string) error {
 		pm.reconnectMu.Unlock()
 	}()
 
+	if err := pm.takeRoom(sessionName); err != nil {
+		return err
+	}
+
 	// Create new pipe (outside lock since it spawns a process)
 	pipe, err := NewControlPipe(sessionName)
 	if err != nil {
+		pm.giveRoom()
 		return fmt.Errorf("connect pipe for %s: %w", sessionName, err)
 	}
 
@@ -88,6 +107,7 @@ func (pm *PipeManager) Connect(sessionName string) error {
 	if existing, ok := pm.pipes[sessionName]; ok && existing.IsAlive() {
 		pm.mu.Unlock()
 		pipe.Close() // Discard the one we just created
+		pm.giveRoom()
 		return nil
 	}
 	pm.pipes[sessionName] = pipe
@@ -113,7 +133,11 @@ func (pm *PipeManager) Disconnect(sessionName string) {
 
 	if pipe != nil {
 		pipe.Close()
+		pm.giveRoom()
 	}
+	pm.roomMu.Lock()
+	delete(pm.skipped, sessionName)
+	pm.roomMu.Unlock()
 	pipeLog.Debug("pipe_disconnected", slog.String("session", sessionName))
 }
 
@@ -331,20 +355,13 @@ func (pm *PipeManager) watchPipe(sessionName string, pipe *ControlPipe) {
 
 	pipeLog.Debug("pipe_died_scheduling_reconnect", slog.String("session", sessionName))
 
-	// Check if already reconnecting
-	pm.reconnectMu.Lock()
-	if pm.reconnecting[sessionName] {
-		pm.reconnectMu.Unlock()
-		return
-	}
-	pm.reconnecting[sessionName] = true
-	pm.reconnectMu.Unlock()
+	// Reap the dead pipe now. Its reader has stopped, but the tmux -C process
+	// may still be attached (a scanner error leaves it running), holding three
+	// of the server's descriptors with nobody reading it.
+	pm.dropPipe(sessionName, pipe)
 
-	defer func() {
-		pm.reconnectMu.Lock()
-		delete(pm.reconnecting, sessionName)
-		pm.reconnectMu.Unlock()
-	}()
+	// Connect has its own guard against concurrent creation; marking the
+	// session "reconnecting" here made every Connect below a silent no-op.
 
 	backoff := 2 * time.Second
 	maxBackoff := 30 * time.Second
@@ -361,14 +378,11 @@ func (pm *PipeManager) watchPipe(sessionName string, pipe *ControlPipe) {
 		// Avoids infinite reconnect loops for deleted/non-existent sessions.
 		if !tmuxSessionExists(sessionName) {
 			pipeLog.Debug("pipe_reconnect_session_gone", slog.String("session", sessionName))
-			pm.mu.Lock()
-			delete(pm.pipes, sessionName)
-			pm.mu.Unlock()
 			return
 		}
 
 		err := pm.Connect(sessionName)
-		if err == nil {
+		if err == nil && pm.IsConnected(sessionName) {
 			pipeLog.Info("pipe_reconnected", slog.String("session", sessionName))
 			return
 		}
@@ -386,9 +400,88 @@ func (pm *PipeManager) watchPipe(sessionName string, pipe *ControlPipe) {
 	}
 
 	pipeLog.Debug("pipe_reconnect_gave_up", slog.String("session", sessionName), slog.Int("max_retries", maxRetries))
+}
+
+// dropPipe closes and forgets pipe if it is still the one registered for the
+// session (a newer pipe is left alone).
+func (pm *PipeManager) dropPipe(sessionName string, pipe *ControlPipe) {
 	pm.mu.Lock()
-	delete(pm.pipes, sessionName)
+	current := pm.pipes[sessionName] == pipe
+	if current {
+		delete(pm.pipes, sessionName)
+	}
 	pm.mu.Unlock()
+	pipe.Close()
+	if current {
+		pm.giveRoom()
+	}
+}
+
+// ErrNoServerRoom is Connect's refusal when another pipe would take the tmux
+// server into the descriptors held back for commands. The session is still
+// polled by subprocess; it just has no event stream.
+var ErrNoServerRoom = errors.New("tmux server near its open-file limit")
+
+// roomTTL is how long a probe stands. A roomy server is probed rarely.
+func (f ServerFiles) roomTTL() time.Duration {
+	if f.PipeBudget() > 500 {
+		return 5 * time.Minute
+	}
+	return 15 * time.Second
+}
+
+// takeRoom debits one pipe from the server's budget, probing when the cached
+// reading is stale. A server that cannot be probed because it refuses clients
+// has no room; one that cannot be probed for any other reason is not
+// limited, since its limit is unknown.
+func (pm *PipeManager) takeRoom(sessionName string) error {
+	pm.roomMu.Lock()
+	defer pm.roomMu.Unlock()
+	if pm.probeRoom == nil {
+		return nil
+	}
+	if pm.roomAt.IsZero() || time.Since(pm.roomAt) > pm.room.roomTTL() {
+		f, err := pm.probeRoom()
+		pm.room, pm.roomErr, pm.roomAt = f, err, time.Now()
+		if err == nil {
+			pipeLog.Debug("tmux_server_files", slog.Int("limit", f.Limit), slog.Int("in_use", f.InUse), slog.Int("pipe_budget", f.PipeBudget()))
+		}
+	}
+	if pm.roomErr != nil {
+		if _, full := ServerUnreachable(); full {
+			pm.skipped[sessionName] = true
+			return fmt.Errorf("%w: %v", ErrNoServerRoom, pm.roomErr)
+		}
+		return nil
+	}
+	if pm.room.PipeBudget() < 1 {
+		if !pm.skipped[sessionName] {
+			pipeLog.Warn("pipe_skipped_no_server_room", slog.String("session", sessionName),
+				slog.Int("limit", pm.room.Limit), slog.Int("in_use", pm.room.InUse))
+		}
+		pm.skipped[sessionName] = true
+		return ErrNoServerRoom
+	}
+	pm.room.InUse += pipeFDCost
+	delete(pm.skipped, sessionName)
+	return nil
+}
+
+// giveRoom credits back a pipe that closed or was never made.
+func (pm *PipeManager) giveRoom() {
+	pm.roomMu.Lock()
+	defer pm.roomMu.Unlock()
+	if pm.roomErr == nil && pm.room.InUse >= pipeFDCost {
+		pm.room.InUse -= pipeFDCost
+	}
+}
+
+// Room is the last reading of the tmux server's descriptors and how many
+// sessions are going without a pipe for lack of them.
+func (pm *PipeManager) Room() (ServerFiles, int) {
+	pm.roomMu.Lock()
+	defer pm.roomMu.Unlock()
+	return pm.room, len(pm.skipped)
 }
 
 // tmuxSessionExists checks if a tmux session exists (lightweight subprocess).

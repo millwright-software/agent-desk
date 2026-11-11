@@ -23,12 +23,32 @@ func skipIfNoTmuxServer(t *testing.T) {
 // TestMain ensures all tmux tests use the _test profile to prevent
 // accidental modification of production data.
 // CRITICAL: This was missing and caused test data to overwrite production sessions!
+//
+// Every tmux command in this package's tests goes to a private server: its own
+// TMUX_TMPDIR, with TMUX unset so a run from inside tmux doesn't follow the
+// attached client home. The tests used to create and kill sessions on the
+// user's default server, next to live agents.
 func TestMain(m *testing.M) {
 	// Force _test profile for all tests in this package
 	os.Setenv("AGENTDESK_PROFILE", "_test")
 
+	// Short path: a unix socket path is capped at 104 bytes on macOS.
+	dir, err := os.MkdirTemp("/tmp", "adt")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("TMUX_TMPDIR", dir)
+	os.Unsetenv("TMUX")
+	os.Unsetenv("TMUX_PANE")
+	if _, err := exec.LookPath("tmux"); err == nil {
+		_ = exec.Command("tmux", "new-session", "-d", "-s", "agentdesk_testseed").Run()
+	}
+
 	// Run tests
 	code := m.Run()
+
+	_ = exec.Command("tmux", "kill-server").Run()
+	_ = os.RemoveAll(dir)
 
 	// Cleanup: Kill any orphaned test sessions after tests complete
 	// This prevents RAM waste from lingering test sessions

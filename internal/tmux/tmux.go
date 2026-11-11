@@ -124,6 +124,7 @@ func RefreshSessionCache() {
 	// Subprocess fallback: list-windows -a
 	cmd := exec.Command("tmux", "list-windows", "-a", "-F", "#{session_name}\t#{window_activity}")
 	output, err := cmd.Output()
+	noteTmuxResult(err, exitStderr(err))
 	if err != nil {
 		sessionCacheMu.Lock()
 		sessionCacheData = nil
@@ -1534,6 +1535,7 @@ func (s *Session) CapturePane() (string, error) {
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-t", s.Name, "-p", "-J")
 		output, err := cmd.Output()
+		noteTmuxResult(err, exitStderr(err))
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				return "", ErrCaptureTimeout
@@ -1563,6 +1565,7 @@ func (s *Session) CaptureFullHistory() (string, error) {
 	// -J joins wrapped lines and trims trailing spaces so hashes don't change on resize
 	cmd := exec.Command("tmux", "capture-pane", "-t", s.Name, "-p", "-J", "-S", "-2000")
 	output, err := cmd.Output()
+	noteTmuxResult(err, exitStderr(err))
 	if err != nil {
 		return "", fmt.Errorf("failed to capture history: %w", err)
 	}

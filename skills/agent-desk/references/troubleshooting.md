@@ -51,6 +51,40 @@ agent-desk status  # Should show ~0.5% CPU when idle
 
 **With active session:** Normal (live preview updates).
 
+### tmux File Limit (sessions all look dead, or a new window hangs)
+
+**Symptom:** every session shows as not running, previews stick on "Loading
+preview...", attach does nothing, and `tmux ls` prints `server exited
+unexpectedly`, though the agents are still running. Or the yellow banner says
+the tmux server is near its open-file limit.
+
+**Cause:** the tmux server can hold only so many open files. Each agent-desk
+window keeps one control connection per session, three files each, so
+windows × sessions × 3 adds up fast. At the limit tmux refuses every new
+client from every window. macOS's default limit is 256: three or four windows
+on twenty sessions. Since v1.0.28 agent-desk raises its limit before running
+tmux, so a server it starts gets 16384; a server started earlier (or by a
+plain `tmux` from a shell) keeps 256 until it exits.
+
+**Check:**
+
+```bash
+tmux run-shell 'ulimit -n'                                   # the server's limit
+lsof -p "$(tmux display -p '#{pid}')" | wc -l                # files it holds now
+```
+
+**Fix, safest first:**
+1. Close an extra agent-desk window. Its connections close with it and the
+   server answers again within seconds; nothing else is touched.
+2. Keep running: from v1.0.28 a window that would push the server over stops
+   opening connections and polls instead (the banner says how many sessions),
+   so the other windows keep working.
+3. Lift the limit for good: the next tmux server agent-desk starts has 16384.
+   That means this server has to end (a reboot, or `tmux kill-server`), which
+   ends every session in it. Claude sessions come back with `R` (their
+   conversations resume); plain shells lose their state. Only you can choose
+   when; nothing in agent-desk does it.
+
 ### Log Files Too Large
 
 Add to `~/.agent-desk/config.toml`:
