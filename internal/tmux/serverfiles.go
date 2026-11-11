@@ -62,6 +62,18 @@ func (f ServerFiles) Headroom() int { return f.Limit - f.InUse }
 // the ones a few agent-desk windows can fill.
 func (f ServerFiles) Low() bool { return f.Limit > 0 && f.Limit < 1024 }
 
+// Relief is the shortest instruction that gives the server room again. A
+// server on the old default class (Low) stays capped however many windows
+// close, so closing one only buys time; the real fix is to restart it so a
+// fresh server inherits agent-desk's raised limit. A roomier server that is
+// merely full answers again the moment a window closes.
+func (f ServerFiles) Relief() string {
+	if f.Low() {
+		return "restart the tmux server to lift the limit (Troubleshooting: tmux file limit)"
+	}
+	return "Close an extra agent-desk window (Troubleshooting: tmux file limit)"
+}
+
 // ProbeServerFiles reads the default tmux server's limit (through a shell it
 // spawns, which inherits it) and counts its descriptors with lsof.
 func ProbeServerFiles() (ServerFiles, error) {
