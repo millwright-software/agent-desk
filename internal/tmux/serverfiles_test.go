@@ -47,11 +47,46 @@ func TestPipeBudget(t *testing.T) {
 }
 
 // A low-limit (legacy) server is capped no matter how many windows close, so
-// its relief is to restart; a roomier server that is merely full frees up
-// when a window closes.
+// its relief is to restart, and the instruction carries what that costs; a
+// roomier server that is merely full frees up when a window closes.
 func TestRelief(t *testing.T) {
-	assert.Contains(t, ServerFiles{Limit: 256, InUse: 200}.Relief(), "restart the tmux server")
-	assert.Contains(t, ServerFiles{Limit: 16384, InUse: 16000}.Relief(), "Close an extra agent-desk window")
+	low := ServerFiles{Limit: 256, InUse: 200}.Relief()
+	assert.Contains(t, low, "tmux server restart")
+	assert.Contains(t, low, "ends every session")
+	roomy := ServerFiles{Limit: 16384, InUse: 16000}.Relief()
+	assert.Contains(t, roomy, "Close an extra agent-desk window")
+	assert.NotContains(t, roomy, "restart")
+	assert.Contains(t, ServerFiles{}.Relief(), "Close an extra agent-desk window", "unknown limit: the safe instruction")
+}
+
+// A server that refuses clients cannot be probed, and the failed probe blanks
+// Room. LastRoom keeps the last good reading so the full-server banner still
+// knows it is talking about a low-limit server.
+func TestLastRoomSurvivesFailedProbe(t *testing.T) {
+	pm := NewPipeManager(t.Context(), nil)
+	defer pm.Close()
+	fail := false
+	pm.probeRoom = func() (ServerFiles, error) {
+		if fail {
+			return ServerFiles{}, errors.New("server exited unexpectedly")
+		}
+		return ServerFiles{PID: 1, Limit: 256, InUse: 100}, nil
+	}
+
+	assert.Equal(t, 0, pm.LastRoom().Limit, "nothing known before a probe")
+	_ = pm.takeRoom("agentdesk_nope_a")
+	assert.Equal(t, 256, pm.LastRoom().Limit)
+
+	fail = true
+	pm.roomMu.Lock()
+	pm.roomAt = time.Time{} // the reading has gone stale
+	pm.roomMu.Unlock()
+	_ = pm.takeRoom("agentdesk_nope_b")
+
+	room, _ := pm.Room()
+	assert.Equal(t, 0, room.Limit, "the failed probe blanked the current reading")
+	assert.True(t, pm.LastRoom().Low(), "the last good reading stands")
+	assert.Contains(t, pm.LastRoom().Relief(), "tmux server restart")
 }
 
 // A server without room for another pipe gets none: Connect refuses before

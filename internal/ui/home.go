@@ -1322,15 +1322,18 @@ func (h *Home) bannerMsg() string {
 // cached state, so it is cheap per tick.
 func tmuxServerWarning() string {
 	pm := tmux.GetPipeManager()
-	var room tmux.ServerFiles
+	var room, known tmux.ServerFiles
 	skipped := 0
 	if pm != nil {
 		room, skipped = pm.Room()
+		known = pm.LastRoom()
 	}
 
+	// A full server cannot be probed, so room is blank here; the last good
+	// reading says which class of server it is.
 	if since, full := tmux.ServerUnreachable(); full {
 		return fmt.Sprintf("tmux server is full (open-file limit) since %s: agents still running. %s",
-			since.Format("3:04pm"), room.Relief())
+			since.Format("3:04pm"), known.Relief())
 	}
 	if pm == nil {
 		return ""
@@ -1340,7 +1343,7 @@ func tmuxServerWarning() string {
 			room.InUse, room.Limit, skipped, room.Relief())
 	}
 	if room.Low() && room.PipeBudget() < pm.ConnectedCount() {
-		return fmt.Sprintf("tmux server allows only %d open files (%d in use): %s",
+		return fmt.Sprintf("tmux server allows only %d open files (%d in use): another agent-desk window won't fit. %s",
 			room.Limit, room.InUse, room.Relief())
 	}
 	return ""

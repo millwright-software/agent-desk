@@ -65,11 +65,13 @@ func (f ServerFiles) Low() bool { return f.Limit > 0 && f.Limit < 1024 }
 // Relief is the shortest instruction that gives the server room again. A
 // server on the old default class (Low) stays capped however many windows
 // close, so closing one only buys time; the real fix is to restart it so a
-// fresh server inherits agent-desk's raised limit. A roomier server that is
-// merely full answers again the moment a window closes.
+// fresh server inherits agent-desk's raised limit. That restart ends every
+// session in the server, so the instruction says so: the banner must not
+// send someone to the destructive fix without its cost. A roomier server
+// that is merely full answers again the moment a window closes.
 func (f ServerFiles) Relief() string {
 	if f.Low() {
-		return "restart the tmux server to lift the limit (Troubleshooting: tmux file limit)"
+		return "Only a tmux server restart lifts its limit, and that ends every session (R resumes Claude ones). Troubleshooting: tmux file limit"
 	}
 	return "Close an extra agent-desk window (Troubleshooting: tmux file limit)"
 }
