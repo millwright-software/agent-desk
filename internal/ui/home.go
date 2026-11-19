@@ -7319,8 +7319,9 @@ func (h *Home) renderGroupItem(b *strings.Builder, item session.Item, selected b
 		countStyle = GroupCountSelStyle
 	}
 
-	// Use recursive count to include sessions in subgroups (Issue #48)
-	sessionCount := h.groupTree.SessionCountForGroup(group.Path)
+	// Use recursive count to include sessions in subgroups (Issue #48).
+	// Live only: snoozed sessions are counted on the Snoozed row instead.
+	sessionCount := h.groupTree.LiveSessionCountForGroup(group.Path)
 	countStr := countStyle.Render(fmt.Sprintf(" (%d)", sessionCount))
 
 	// Build the row: [indent][hotkey][expand] [name](count)

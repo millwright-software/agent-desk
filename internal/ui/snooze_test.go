@@ -289,6 +289,13 @@ func TestSnoozeFold(t *testing.T) {
 	if got := rows(); got != "GeGc[3]" {
 		t.Fatalf("closed: %q, want GeGc[3]", got)
 	}
+	// A group header counts only the rows the group can show.
+	if w, hm := h.groupTree.LiveSessionCountForGroup("Work"), h.groupTree.LiveSessionCountForGroup("Home"); w != 1 || hm != 1 {
+		t.Errorf("live counts: Work %d, Home %d, want 1 and 1", w, hm)
+	}
+	if got := h.groupTree.SessionCountForGroup("Work"); got != 3 {
+		t.Errorf("total count for Work: %d, want 3 (the CLI's count is unchanged)", got)
+	}
 	fold := len(h.flatItems) - 1
 	if !h.flatItems[fold-1].IsLastInGroup {
 		t.Error("a group's last live session draws as its last line: the fold is no longer in the group")

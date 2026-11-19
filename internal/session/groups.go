@@ -1049,6 +1049,32 @@ func (t *GroupTree) SessionCountForGroup(groupPath string) int {
 	return count
 }
 
+// LiveSessionCountForGroup is SessionCountForGroup without the sessions drawn
+// in the snooze fold: the snoozed, and the sub-sessions that travel with a
+// snoozed parent in the same group. It is the count of rows the group can
+// show, which is what its header prints.
+func (t *GroupTree) LiveSessionCountForGroup(groupPath string) int {
+	count := 0
+	for path, g := range t.Groups {
+		if path != groupPath && !strings.HasPrefix(path, groupPath+"/") {
+			continue
+		}
+		snoozed := make(map[string]bool)
+		for _, s := range g.Sessions {
+			if s.Flag == FlagSnoozed && !s.IsSubSession() {
+				snoozed[s.ID] = true
+			}
+		}
+		for _, s := range g.Sessions {
+			if snoozed[s.ID] || (s.IsSubSession() && snoozed[s.ParentSessionID]) {
+				continue
+			}
+			count++
+		}
+	}
+	return count
+}
+
 // GroupCount returns total group count
 func (t *GroupTree) GroupCount() int {
 	return len(t.Groups)
