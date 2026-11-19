@@ -11,6 +11,10 @@ the in-app updater downloads the `agent-desk_<version>_<os>_<arch>.tar.gz` asset
 
 ## [Unreleased]
 
+### Changed
+
+- **One Snoozed bucket at the bottom of the list.** Every snoozed session, from every group, now sits under a single `▸ Snoozed (N)` row below the last group, instead of a `▸ N snoozed` row inside each group. It is closed by default and shows the next wake time; `Enter`, `Tab` or `→` opens it (soonest wake first), `←` closes it. Nothing moves in the data: a session keeps its group and wakes into its usual spot as unread, so this is not the old global Snoozed group from v1.0.21. With the cursor on the row, the preview lists the snoozed sessions under the group each belongs to. Folds left open per group in earlier versions are forgotten; the bucket starts closed.
+
 ## [1.0.29] - 2026-11-11
 
 ### Fixed

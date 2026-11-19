@@ -256,17 +256,20 @@ func TestSnoozeDialogPicks(t *testing.T) {
 	}
 }
 
-// A group's snoozed sessions sit in a fold row at its bottom, closed by
-// default; opening it lists them under it, and left closes it again.
+// Every snoozed session, from every group, sits in one fold row at the bottom
+// of the list, closed by default. Opening it lists them soonest wake first;
+// left closes it. The sessions keep their own groups throughout.
 func TestSnoozeFold(t *testing.T) {
-	a, b, c := inst("a"), inst("b"), inst("c")
+	a, b, c, d, e := inst("a"), inst("b"), inst("c"), inst("d"), inst("e")
 	for i, s := range []*session.Instance{a, b, c} {
 		s.GroupPath, s.Order = "Work", i
 	}
-	h := &Home{instances: []*session.Instance{a, b, c}}
+	d.GroupPath, e.GroupPath, e.Order = "Home", "Home", 1
+	h := &Home{instances: []*session.Instance{a, b, c, d, e}}
 	h.groupTree = session.NewGroupTree(h.instances)
 	h.snoozeSession(a, time.Now().Add(48*time.Hour))
 	h.snoozeSession(b, time.Now().Add(2*time.Hour))
+	h.snoozeSession(d, time.Now().Add(24*time.Hour))
 
 	rows := func() string {
 		out := ""
@@ -282,28 +285,65 @@ func TestSnoozeFold(t *testing.T) {
 		}
 		return out
 	}
-	if got := rows(); got != "Gc[2]" {
-		t.Fatalf("closed: %q, want Gc[2]", got)
+	// Groups sort by name: Home (e live), Work (c live), then the one fold.
+	if got := rows(); got != "GeGc[3]" {
+		t.Fatalf("closed: %q, want GeGc[3]", got)
 	}
 	fold := len(h.flatItems) - 1
-	if h.flatItems[fold-1].IsLastInGroup {
-		t.Error("the last live session must not draw as last: the fold is")
+	if !h.flatItems[fold-1].IsLastInGroup {
+		t.Error("a group's last live session draws as its last line: the fold is no longer in the group")
 	}
-	if !h.flatItems[fold].IsLastInGroup {
-		t.Error("fold row should be the group's last line")
+	if got := h.flatItems[fold]; got.Level != 0 || got.Path != session.SnoozeFoldKey {
+		t.Errorf("fold row: level %d path %q, want the list's left edge and the fold key", got.Level, got.Path)
+	}
+	if !h.flatItems[fold].SnoozeNextWake.Equal(b.SnoozeUntil) {
+		t.Error("fold row should carry the soonest wake (b)")
 	}
 
 	h.cursor = fold
-	h.setSnoozeFold("Work", true)
-	if got := rows(); got != "Gc[2]ba" {
-		t.Fatalf("open: %q, want Gc[2]ba", got)
+	h.setSnoozeFold(session.SnoozeFoldKey, true)
+	if got := rows(); got != "GeGc[3]bda" {
+		t.Fatalf("open: %q, want GeGc[3]bda (soonest wake first, across groups)", got)
 	}
 	if h.cursor != fold {
 		t.Errorf("cursor %d, want the fold row %d", h.cursor, fold)
 	}
+	for i, want := range []string{"Work", "Home", "Work"} {
+		if got := h.flatItems[fold+1+i].Path; got != want {
+			t.Errorf("row %d in the fold: path %q, want its own group %q", i, got, want)
+		}
+	}
+	if a.GroupPath != "Work" || d.GroupPath != "Home" {
+		t.Error("the bucket is display only: a snoozed session keeps its group")
+	}
+	if !h.flatItems[len(h.flatItems)-1].IsLastInGroup {
+		t.Error("the last row in the fold draws as its last line")
+	}
 
-	h.setSnoozeFold("Work", false)
-	if got := rows(); got != "Gc[2]" {
+	// A collapsed group does not hide its snoozed sessions from the bucket.
+	h.groupTree.CollapseGroup("Work")
+	h.rebuildFlatItems()
+	if got := rows(); got != "GeG[3]bda" {
+		t.Errorf("Work collapsed: %q, want GeG[3]bda", got)
+	}
+	h.groupTree.ExpandGroup("Work")
+
+	h.setSnoozeFold(session.SnoozeFoldKey, false)
+	if got := rows(); got != "GeGc[3]" {
 		t.Errorf("closed again: %q", got)
+	}
+
+	// Waking a session sends it home and the fold shrinks; the last one out
+	// removes the row.
+	b.WakeFromSnooze()
+	h.rebuildFlatItems()
+	if got := rows(); got != "GeGbc[2]" {
+		t.Errorf("b woken: %q, want GeGbc[2]", got)
+	}
+	a.WakeFromSnooze()
+	d.WakeFromSnooze()
+	h.rebuildFlatItems()
+	if got := rows(); got != "GdeGabc" {
+		t.Errorf("all woken: %q, want GdeGabc and no fold row", got)
 	}
 }

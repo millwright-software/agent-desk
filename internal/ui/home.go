@@ -3902,10 +3902,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			collapsed := false
-			if h.snoozeOpen[item.Path] && (item.Type == session.ItemTypeSnoozeFold ||
-				(item.Type == session.ItemTypeSession && item.Session != nil && item.Session.Flag == session.FlagSnoozed)) {
-				// Inside an open snooze fold, left folds it first.
-				h.setSnoozeFold(item.Path, false)
+			if item.Type == session.ItemTypeSnoozeFold ||
+				(item.Type == session.ItemTypeSession && item.Session != nil && h.inSnoozeFold(item.Session)) {
+				// On the snooze fold or a session inside it, left folds it
+				// and lands on its row. Never falls through: these rows sit
+				// outside every group, so there is no group to collapse.
+				h.setSnoozeFold(session.SnoozeFoldKey, false)
 				return h, nil
 			}
 			if item.Type == session.ItemTypeGroup {
@@ -3919,7 +3921,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				collapsed = true
-			} else if item.Type == session.ItemTypeSession || item.Type == session.ItemTypeSnoozeFold {
+			} else if item.Type == session.ItemTypeSession {
 				// Move cursor to parent group
 				h.groupTree.CollapseGroup(item.Path)
 				h.rebuildFlatItems()
@@ -4958,8 +4960,24 @@ func (h *Home) snoozeSession(inst *session.Instance, until time.Time) {
 	h.forceSaveInstances()
 }
 
-// setSnoozeFold opens or closes a group's snooze fold, leaves the cursor on
-// the fold row, and remembers the choice across restarts.
+// inSnoozeFold reports whether a session is drawn in the snooze fold at the
+// bottom of the list: snoozed itself, or the sub-session of a snoozed parent.
+func (h *Home) inSnoozeFold(inst *session.Instance) bool {
+	if inst.Flag == session.FlagSnoozed && !inst.IsSubSession() {
+		return true
+	}
+	if inst.IsSubSession() {
+		for _, p := range h.instances {
+			if p.ID == inst.ParentSessionID {
+				return p.Flag == session.FlagSnoozed && !p.IsSubSession() && p.GroupPath == inst.GroupPath
+			}
+		}
+	}
+	return false
+}
+
+// setSnoozeFold opens or closes the snooze fold (key: session.SnoozeFoldKey),
+// leaves the cursor on the fold row, and remembers the choice across restarts.
 func (h *Home) setSnoozeFold(groupPath string, open bool) {
 	if h.snoozeOpen == nil {
 		h.snoozeOpen = make(map[string]bool)
@@ -7322,42 +7340,25 @@ const (
 	subLast   = "└─" // Last sub-session
 )
 
-// renderSessionItem renders a single session item for the left panel
-// PERFORMANCE: Uses cached styles from styles.go to avoid allocations
-// renderSnoozeFoldItem renders a group's "N snoozed" row: the last line of
-// the group, folded by default, with the soonest wake time at the right edge.
+// renderSnoozeFoldItem renders the one "N snoozed" row at the bottom of the
+// list: drawn at the left edge like a group header, dim, folded by default,
+// with the soonest wake time at the right edge.
 func (h *Home) renderSnoozeFoldItem(b *strings.Builder, item session.Item, selected bool) {
-	treeStyle := TreeConnectorStyle
 	textStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
 	iconStyle := GroupExpandStyle
-	selectionPrefix := " "
 	if selected {
-		treeStyle = TreeConnectorSelStyle
-		textStyle = SessionTitleSelStyle
+		textStyle = GroupNameSelStyle
 		iconStyle = GroupExpandSelStyle
-		selectionPrefix = SessionSelectionPrefix.Render("▶")
 	}
 	icon := "▸"
 	if item.SnoozeFoldOpen {
 		icon = "▾"
 	}
-	baseIndent := strings.Repeat(treeEmpty, max(0, item.Level-1))
-	left := baseIndent + selectionPrefix + treeStyle.Render(treeLast) + " " +
-		iconStyle.Render(icon) + " " + textStyle.Render(fmt.Sprintf("%d snoozed", item.SnoozedCount))
+	left := iconStyle.Render(icon) + " " + textStyle.Render(fmt.Sprintf("Snoozed (%d)", item.SnoozedCount))
 
-	// Soonest wake in the group, right-aligned like the session columns.
-	var soonest time.Time
-	if item.Group != nil {
-		for _, s := range item.Group.Sessions {
-			if s.Flag == session.FlagSnoozed && !s.SnoozeUntil.IsZero() &&
-				(soonest.IsZero() || s.SnoozeUntil.Before(soonest)) {
-				soonest = s.SnoozeUntil
-			}
-		}
-	}
 	row := left
-	if !soonest.IsZero() && h.listRowWidth > 0 {
-		wake := "next " + session.FormatSnoozeUntil(soonest, time.Now())
+	if !item.SnoozeNextWake.IsZero() && h.listRowWidth > 0 {
+		wake := "next " + session.FormatSnoozeUntil(item.SnoozeNextWake, time.Now())
 		if pad := h.listRowWidth - 1 - lipgloss.Width(left) - lipgloss.Width(wake); pad >= 1 {
 			row = left + strings.Repeat(" ", pad) + textStyle.Render(wake)
 		}
@@ -7366,6 +7367,64 @@ func (h *Home) renderSnoozeFoldItem(b *strings.Builder, item session.Item, selec
 	b.WriteString("\n")
 }
 
+// renderSnoozeFoldPreview is the right pane for the snooze fold row: every
+// snoozed session under the group it will wake into, soonest wake first. The
+// list itself is one flat bucket; this is where the groups still show.
+func (h *Home) renderSnoozeFoldPreview(width, height int) string {
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("⏰ Snoozed"))
+	b.WriteString("\n\n")
+
+	byGroup := make(map[string][]*session.Instance)
+	total := 0
+	for _, s := range h.instances {
+		if s.Flag == session.FlagSnoozed && !s.IsSubSession() {
+			byGroup[s.GroupPath] = append(byGroup[s.GroupPath], s)
+			total++
+		}
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorText).Bold(true).Render(fmt.Sprintf("%d sessions", total)))
+	b.WriteString("\n")
+	b.WriteString(DimStyle.Render("Each wakes into its own group, as unread."))
+	b.WriteString("\n")
+
+	dim := lipgloss.NewStyle().Foreground(ColorTextDim)
+	now := time.Now()
+	lines := 4
+	if h.groupTree != nil {
+		for _, g := range h.groupTree.GroupList {
+			list := byGroup[g.Path]
+			if len(list) == 0 {
+				continue
+			}
+			if lines+2 >= height {
+				break
+			}
+			sort.SliceStable(list, func(i, j int) bool { return list[i].SnoozeUntil.Before(list[j].SnoozeUntil) })
+			b.WriteString("\n")
+			b.WriteString(GroupNameStyle.Render(g.Name))
+			b.WriteString("\n")
+			lines += 2
+			for _, s := range list {
+				if lines >= height {
+					break
+				}
+				wake := session.FormatSnoozeUntil(s.SnoozeUntil, now)
+				title := s.Title
+				if room := width - 4 - lipgloss.Width(wake) - 2; room > 4 && lipgloss.Width(title) > room {
+					title = string([]rune(title)[:room-1]) + "…"
+				}
+				b.WriteString("  " + lipgloss.NewStyle().Foreground(ColorText).Render(title) + "  " + dim.Render(wake))
+				b.WriteString("\n")
+				lines++
+			}
+		}
+	}
+	return b.String()
+}
+
+// renderSessionItem renders a single session item for the left panel
+// PERFORMANCE: Uses cached styles from styles.go to avoid allocations
 func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected bool) {
 	inst := item.Session
 
@@ -7818,7 +7877,10 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	item := h.flatItems[h.cursor]
 
 	// If group is selected, show group info
-	if item.Type == session.ItemTypeGroup || item.Type == session.ItemTypeSnoozeFold {
+	if item.Type == session.ItemTypeSnoozeFold {
+		return h.renderSnoozeFoldPreview(width, height)
+	}
+	if item.Type == session.ItemTypeGroup {
 		return h.renderGroupPreview(item.Group, width, height)
 	}
 
